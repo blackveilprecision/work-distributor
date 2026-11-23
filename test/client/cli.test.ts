@@ -69,7 +69,7 @@ test("repo add/ls/rm: the id is URL-encoded, the url defaults to GitHub", async 
   expect(out).toEqual(["acme/shop\tu\tmain\ttrue\tgpu\trust\tdb"]);
   expect(await cliMain(["repo", "rm", "acme/shop"])).toBe(0);
   expect(coord.reqs.at(-1)).toMatchObject({ method: "DELETE", path: "/repos/acme%2Fshop" });
-  expect(await cliMain(["repo", "add"])).toBe(1);
+  expect(await cliMain(["repo", "add"])).toBe(2);   // a usage mistake: exit 2 with the command's help
 });
 
 test("WD_CLIENT_CONFIG names the client.json to read; env vars still win", () => {
@@ -98,4 +98,33 @@ test("wd --version prints the package.json version (what a release tag must matc
     const r = Bun.spawnSync([process.execPath, new URL("../../src/main.ts", import.meta.url).pathname, flag]);
     expect(r.stdout.toString().trim()).toBe(pkg.version);
   }
+});
+
+test("help: every level explains itself, without colour codes off a terminal; usage mistakes exit 2", async () => {
+  const errs: string[] = [];
+  (console.error as any).mockImplementation((...a: unknown[]) => { errs.push(a.join(" ")); });
+  expect(await cliMain([])).toBe(0);
+  expect(out.join("\n")).toContain("USAGE wd submit|ls|status|");
+  expect(out.join("\n")).not.toMatch(/\x1b\[/);
+  out.length = 0;
+  expect(await cliMain(["submit", "--help"])).toBe(0);
+  expect(out.join("\n")).toMatch(/USAGE wd submit \[OPTIONS\] <REPO> <PROMPT>[\s\S]*--require=<label>\s+Host label the thread needs; repeat for several/);
+  out.length = 0;
+  expect(await cliMain(["help", "repo", "add"])).toBe(0);
+  expect(out.join("\n")).toContain("USAGE wd repo add [OPTIONS] <ID>");
+  out.length = 0;
+  expect(await cliMain(["host", "install", "-h"])).toBe(0);
+  expect(out.join("\n")).toContain("--label=<label>");
+  expect(await cliMain(["bogus"])).toBe(2);
+  expect(errs.at(-1)).toMatch(/USAGE wd submit[\s\S]*wd: Unknown command bogus$/);
+  expect(await cliMain(["status"])).toBe(2);
+  expect(errs.at(-1)).toMatch(/USAGE wd status[\s\S]*wd: Missing required positional argument: ID$/);
+  expect(coord.reqs).toEqual([]);
+});
+
+test("repeated flags keep every value, and flags may follow the words", async () => {
+  expect(await cliMain(["submit", "o/r", "--require", "gpu", "do", "it", "--require=linux", "--size", "heavy"])).toBe(0);
+  expect(coord.reqs.at(-1)!.body).toMatchObject({ repo: "o/r", prompt: "do it", requires: ["gpu", "linux"], size: "heavy" });
+  expect(await cliMain(["send", "th1", "more", "--caller", "other"])).toBe(0);
+  expect(coord.reqs.at(-1)).toMatchObject({ path: "/threads/th1/send", body: { text: "more" } });
 });

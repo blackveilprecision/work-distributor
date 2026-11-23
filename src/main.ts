@@ -1,19 +1,6 @@
 #!/usr/bin/env bun
-// One binary: `wd coord`, `wd agent`, `wd mcp`, otherwise a CLI subcommand.
+// One binary: the CLI, the installers and the daemons (`wd coord`, `wd agent`, `wd mcp`). `wd --help` lists them all.
 export {};
-const [cmd, ...rest] = process.argv.slice(2);
-
-if (cmd === "--version" || cmd === "-V" || cmd === "version") console.log((await import("./shared/version.ts")).VERSION);
-else switch (cmd === "coord" && rest[0] === "install" ? "cli" : cmd) {   // `wd coord install` is a CLI command, `wd coord` the daemon
-  case "coord":
-    await (await import("./coord/main.ts")).coordMain(rest);
-    break;
-  case "agent":
-    await (await import("./agent/main.ts")).agentMain(rest);
-    break;
-  case "mcp":
-    await (await import("./mcp/server.ts")).mcpMain(rest);
-    break;
-  default:
-    process.exitCode = await (await import("./cli/main.ts")).cliMain(cmd ? [cmd, ...rest] : []);
-}
+const argv = process.argv.slice(2);
+if (argv.length === 1 && ["--version", "-V", "version"].includes(argv[0])) console.log((await import("./shared/version.ts")).VERSION);
+else process.exitCode = await (await import("./cli/main.ts")).cliMain(argv);

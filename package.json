@@ -11,7 +11,8 @@
     "build:linux": "bun build --compile --target=bun-linux-x64 src/main.ts --outfile dist/wd-linux-x64"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.20.0"
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "citty": "0.2.2"
   },
   "devDependencies": {
     "@types/bun": "latest",

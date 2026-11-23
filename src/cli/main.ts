@@ -1,33 +1,25 @@
-// `wd <subcommand>`: thin wrapper over the coordinator's caller API.
-import { parseArgs } from "node:util";
+// `wd <command>`: the CLI (a thin client of the coordinator's caller API), the installers and the daemons, as citty commands
+// so that `wd <command> --help` explains each one.
+import { defineCommand, renderUsage, runCommand, type ArgsDef, type CommandDef } from "citty";
 import { ack, call, loadCfg, qs, reportText, type Cfg } from "./client.ts";
 import type { HostView, QueueView, Report, Steps, ThreadView } from "../shared/types.ts";
-
-const USAGE = `usage: wd submit <repo> <prompt...|-> [--ref r] [--model m] [--require label]... [--size small|heavy] [--priority] [--ttl hours] [--tag t] [--branch b]
-       wd ls [--all] | status <id> [--full] | send <id> <text...> | cancel <id> | release <id> | hosts [--repo r] | queue [--json]
-       wd tail <id> [-n 20] [--turn n] [--follow] [--json]   (what a turn is doing: its tool calls, text and results)
-       wd reports [--pending] [--after n] [--wait] [--hook --event SessionStart|UserPromptSubmit] | ack <id>...
-       wd repo add <owner/name> [--url u] [--ref main] [--doctor cmd] [--require label]... [--rust] | repo ls | repo rm <id>
-       wd coord install <ssh-host|local> [--listen addr]      (the daemon itself: wd coord [--config file])
-       wd host install <ssh-host|local> [--name n] [--label l]... [--claude path] [--agent-url u] [--git-token-file f] [--coord-url u --host-token t]
-       wd init-local <dir> [--port-base 17780]      (config for a one-machine trial; then run wd coord / wd agent --config ...)
---caller <name> overrides WD_CALLER for any command. wd --version prints the version.
-env: WD_URL, WD_TOKEN, WD_CALLER (or ~/.config/wd/client.json {url, token, caller}; WD_CLIENT_CONFIG names another file)`;
-
-const OPTS = {
-  ref: { type: "string" }, model: { type: "string" }, require: { type: "string", multiple: true }, size: { type: "string" },
-  priority: { type: "boolean" }, ttl: { type: "string" }, tag: { type: "string" }, branch: { type: "string" }, all: { type: "boolean" },
-  pending: { type: "boolean" }, wait: { type: "boolean" }, caller: { type: "string" }, hook: { type: "boolean" }, event: { type: "string" }, after: { type: "string" },
-  name: { type: "string" }, "coord-url": { type: "string" }, "host-token": { type: "string" }, "git-token-file": { type: "string" }, claude: { type: "string" }, label: { type: "string", multiple: true },
-  url: { type: "string" }, doctor: { type: "string" }, rust: { type: "boolean" }, listen: { type: "string" }, "agent-url": { type: "string" }, "port-base": { type: "string" }, json: { type: "boolean" }, full: { type: "boolean" }, repo: { type: "string" },
-  n: { type: "string", short: "n" }, turn: { type: "string" }, follow: { type: "boolean", short: "f" },
-} as const;
+import { VERSION } from "../shared/version.ts";
 
 const json = (v: unknown) => console.log(JSON.stringify(v));
 const ago = (t: number) => { const m = Math.round((Date.now() - t) / 60_000); return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60}m`; };
-
 const clock = (t: number) => (t ? new Date(t).toTimeString().slice(0, 8) : "--:--:--");
 export const stepLines = (r: Steps) => r.steps.map((s) => `${clock(s.at)}  ${s.text}`);
+
+// citty keeps only the last value of a repeated flag; these flags may be given several times.
+const many = (raw: string[], flag: string) =>
+  raw.flatMap((a, i) => (a === `--${flag}` && raw[i + 1] !== undefined ? [raw[i + 1]] : a.startsWith(`--${flag}=`) ? [a.slice(flag.length + 3)] : []));
+const num = (s: unknown) => (typeof s === "string" && s !== "" ? Number(s) : undefined);
+
+const caller = {
+  caller: { type: "string", valueHint: "name", description: "Inbox to use; default WD_CALLER, then client.json's caller, then <hostname>:<directory name>" },
+} as const satisfies ArgsDef;
+const cfgOf = (a: { caller?: string }): Cfg => { const c = loadCfg(); if (a.caller) c.caller = a.caller; return c; };
+const thread = { id: { type: "positional", required: true, valueHint: "thread", description: "Thread id, as printed by submit or ls" } } as const satisfies ArgsDef;
 
 // Follows the thread's latest turn until it ends; a follow-up turn that starts meanwhile is followed too.
 async function tail(cfg: Cfg, id: string, v: { n?: string; turn?: string; follow?: boolean; json?: boolean }) {
@@ -94,86 +86,290 @@ export async function waitReports(cfg: Cfg, after?: string, everyMs = 2000): Pro
   }
 }
 
+// ---- threads ----
+
+const submit = defineCommand({
+  meta: { name: "submit", description: "Queue a new thread: a Claude Code session on <repo> that runs <prompt> on a host with room. Prints {id, position}; the report arrives when the turn ends." },
+  args: {
+    repo: { type: "positional", required: true, valueHint: "owner/name", description: "A registered repo id (see `wd repo ls`)" },
+    prompt: { type: "positional", required: true, valueHint: "prompt...", description: "The task; several words are joined. `-` reads it from stdin" },
+    ref: { type: "string", valueHint: "ref", description: "Base ref for the work branch (default: the repo's default branch)" },
+    branch: { type: "string", valueHint: "name", description: "Work branch to create and push (default: wd/<thread id>)" },
+    model: { type: "string", valueHint: "model", description: "Passed to claude --model, e.g. sonnet, opus, haiku" },
+    require: { type: "string", valueHint: "label", description: "Host label the thread needs; repeat for several" },
+    size: { type: "enum", options: ["small", "heavy"], description: "Memory hint: small (2 GB) or heavy (8 GB); a floor under the repo's measured estimate" },
+    priority: { type: "boolean", description: "Place before threads without it" },
+    ttl: { type: "string", valueHint: "hours", description: "Keep the worktree this long after the last turn for follow-ups (default 24)" },
+    tag: { type: "string", valueHint: "text", description: "Your own label, echoed in every report" },
+    ...caller,
+  },
+  async run({ args, rawArgs }) {
+    const words = args._.slice(1).join(" "), prompt = words === "-" ? await Bun.stdin.text() : words;
+    if (!prompt.trim()) throw new Error("submit needs a prompt");
+    const cfg = cfgOf(args), requires = many(rawArgs, "require");
+    json(await call(cfg, "POST", "/threads", {
+      caller: cfg.caller, repo: args.repo, prompt, ref: args.ref, model: args.model, requires: requires.length ? requires : undefined, size: args.size,
+      priority: args.priority || undefined, ttlHours: num(args.ttl), tag: args.tag, branch: args.branch,
+    }));
+  },
+});
+
+const ls = defineCommand({
+  meta: { name: "ls", description: "List this caller's threads (newest first): id, state, host, repo, branch, tag, reason." },
+  args: { all: { type: "boolean", description: "Every caller's threads, not only this one's" }, ...caller },
+  async run({ args }) {
+    const cfg = cfgOf(args);
+    for (const t of (await call(cfg, "GET", `/threads${qs({ caller: args.all ? undefined : cfg.caller })}`)) as ThreadView[])
+      console.log([t.id, t.state, t.host ?? "-", t.repo, t.branch, t.tag ?? "", t.reason ?? ""].join("\t"));
+  },
+});
+
+const status = defineCommand({
+  meta: { name: "status", description: "Print one thread as JSON. Its lastMessage, like a report's message, is cut at 4,000 characters." },
+  args: { ...thread, full: { type: "boolean", description: "Uncut lastMessage, plus every turn's whole text in messages" }, ...caller },
+  async run({ args }) { json(await call(cfgOf(args), "GET", `/threads/${args.id}${args.full ? "?full=1" : ""}`)); },
+});
+
+const send = defineCommand({
+  meta: { name: "send", description: "Queue a follow-up turn on a running or idle thread. It resumes the same session in the same worktree on the same host, after the current turn ends. Prints {queued: n}." },
+  args: { ...thread, text: { type: "positional", required: true, valueHint: "text...", description: "The follow-up; several words are joined" }, ...caller },
+  async run({ args }) { json(await call(cfgOf(args), "POST", `/threads/${args.id}/send`, { text: args._.slice(1).join(" ") })); },
+});
+
+const cancel = defineCommand({
+  meta: { name: "cancel", description: "Stop a queued or running thread. It ends as cancelled, with a final report." },
+  args: { ...thread, ...caller },
+  async run({ args }) { json(await call(cfgOf(args), "POST", `/threads/${args.id}/cancel`)); },
+});
+
+const release = defineCommand({
+  meta: { name: "release", description: "Finish an idle thread: remove its worktree (the pushed branch stays). No report is written, since you asked for it." },
+  args: { ...thread, ...caller },
+  async run({ args }) { json(await call(cfgOf(args), "POST", `/threads/${args.id}/release`)); },
+});
+
+const tailCmd = defineCommand({
+  meta: { name: "tail", description: "What a turn is doing: its recent steps (tool calls by their main input, text claude wrote, ↳ results), with times." },
+  args: {
+    ...thread,
+    n: { type: "string", alias: "n", valueHint: "count", description: "How many recent steps (default 20)" },
+    turn: { type: "string", valueHint: "n", description: "A specific turn (default: the latest)" },
+    follow: { type: "boolean", alias: "f", description: "Keep printing new steps until the turn ends, then follow a follow-up turn if one starts" },
+    json: { type: "boolean", description: "Print the steps as JSON" },
+    ...caller,
+  },
+  async run({ args }) { await tail(cfgOf(args), args.id, args); },
+});
+
+// ---- reports ----
+
+const reports = defineCommand({
+  meta: { name: "reports", description: "Print this caller's unacknowledged reports as JSON. Reports stay until acknowledged with `wd ack`." },
+  args: {
+    pending: { type: "boolean", description: "Accepted for compatibility; only pending reports are ever listed" },
+    after: { type: "string", valueHint: "id", description: "Only reports with an id above this" },
+    wait: { type: "boolean", description: "Block until there is at least one, print them and exit 0 (retries while the coordinator is down; exits 1 on a bad token)" },
+    hook: { type: "boolean", description: "Claude Code hook mode: print the reports as hook context, acknowledge them, and never fail" },
+    event: { type: "string", valueHint: "name", description: "Hook event name for --hook: SessionStart or UserPromptSubmit (default)" },
+    ...caller,
+  },
+  async run({ args }) {
+    const cfg = cfgOf(args);
+    if (args.hook) return hook(cfg, args.event ?? "UserPromptSubmit", args.after);
+    json(args.wait ? await waitReports(cfg, args.after) : await call(cfg, "GET", `/reports${qs({ caller: cfg.caller, after: args.after })}`));
+  },
+});
+
+const ackCmd = defineCommand({
+  meta: { name: "ack", description: "Acknowledge reports, so they are no longer pending. Prints nothing." },
+  args: { ids: { type: "positional", required: true, valueHint: "report id...", description: "One or more report ids" }, ...caller },
+  async run({ args }) { const cfg = cfgOf(args); for (const id of args._) await ack(cfg, Number(id)); },
+});
+
+// ---- the fleet ----
+
+const hosts = defineCommand({
+  meta: { name: "hosts", description: "Every host: state, running/max threads, available/total memory, free disk, why it is refused, and the repos whose doctor fails there." },
+  args: { repo: { type: "string", valueHint: "owner/name", description: "Also say per host why a new thread of this repo would not start there now, or eligible" }, ...caller },
+  async run({ args }) {
+    for (const h of (await call(cfgOf(args), "GET", `/hosts${args.repo ? qs({ repo: args.repo }) : ""}`)) as HostView[])
+      console.log([h.name, h.state, `run=${h.running}/${h.maxThreads}`, `mem=${h.memAvailMb}/${h.memTotalMb}MB`, `disk=${h.diskFreePct}%`,
+        ...(args.repo ? [h.why ? `${args.repo}: ${h.why}` : `${args.repo}: eligible`] : []),
+        h.reason ?? "", h.doctorFailed?.length ? `doctor fails: ${h.doctorFailed.join(",")}` : ""].filter(Boolean).join("\t"));
+  },
+});
+
+const queue = defineCommand({
+  meta: { name: "queue", description: "The whole queue across callers: queued threads in placement order and why each waits, pending follow-ups, idle threads, and each host's running threads with their latest step." },
+  args: { json: { type: "boolean", description: "Print GET /queue as JSON (what the Herdr panel reads)" }, ...caller },
+  async run({ args }) {
+    const q: QueueView = await call(cfgOf(args), "GET", "/queue");
+    if (args.json) json(q); else console.log(queueText(q));
+  },
+});
+
+const repoId = { id: { type: "positional", required: true, valueHint: "owner/name", description: "Repo id; without --url it means https://github.com/<id>.git" } } as const satisfies ArgsDef;
+const repo = defineCommand({
+  meta: { name: "repo", description: "Register, list and remove the repos threads may run on." },
+  subCommands: {
+    add: defineCommand({
+      meta: { name: "add", description: "Register a repo (or replace its registration). Repos in coord.json win and are not changed." },
+      args: {
+        ...repoId,
+        url: { type: "string", valueHint: "url", description: "Clone URL (default https://github.com/<id>.git); file:// works for a local repo" },
+        ref: { type: "string", valueHint: "branch", description: "Default base branch (default main)" },
+        doctor: { type: "string", valueHint: "command", description: "Shell command a host must pass in a checkout before it gets this repo's threads, e.g. \"bun --version\"" },
+        require: { type: "string", valueHint: "label", description: "Host label every thread of this repo needs; repeat for several" },
+        rust: { type: "boolean", description: "Rust repo: shared target dirs per host, and sccache when installed" },
+        ...caller,
+      },
+      async run({ args, rawArgs }) {
+        const requires = many(rawArgs, "require");
+        const r = await call(cfgOf(args), "PUT", `/repos/${encodeURIComponent(args.id)}`, {
+          url: args.url ?? `https://github.com/${args.id}.git`, defaultRef: args.ref, doctor: args.doctor, requires: requires.length ? requires : undefined, rust: args.rust || undefined });
+        json(r);
+        if (r.source === "config") console.error(`wd: ${args.id} is defined in coord.json, which wins: nothing was changed`);
+      },
+    }),
+    ls: defineCommand({
+      meta: { name: "ls", description: "List registered repos: id, url, default ref, doctor, required labels, rust, source (db or config)." },
+      args: { ...caller },
+      async run({ args }) {
+        for (const r of (await call(cfgOf(args), "GET", "/repos")) as any[])
+          console.log([r.id, r.url, r.defaultRef, r.doctor ?? "", r.requires.join(","), r.rust ? "rust" : "", r.source].join("\t"));
+      },
+    }),
+    rm: defineCommand({
+      meta: { name: "rm", description: "Remove a registered repo. Its queued or idle threads fail with \"no longer configured\"." },
+      args: { ...repoId, ...caller },
+      async run({ args }) { json(await call(cfgOf(args), "DELETE", `/repos/${encodeURIComponent(args.id)}`)); },
+    }),
+  },
+});
+
+// Whether rawArgs name one of cmd's subcommands (the first word that is not a flag or a flag's value).
+const sub = (rawArgs: string[], cmd: CommandDef<any>) => {
+  const w = rawArgs.find((a, i) => !a.startsWith("-") && !(i > 0 && rawArgs[i - 1] === "--config"));
+  return !!w && Object.hasOwn((cmd.subCommands ?? {}) as object, w);
+};
+
+const target = { target: { type: "positional", required: true, valueHint: "ssh-host|local", description: "Anything ssh accepts, or `local` for this machine (no ssh)" } } as const satisfies ArgsDef;
+const config = { config: { type: "string", valueHint: "file", description: "Config file (default ~/.config/wd/coord.json or agent.json)" } } as const satisfies ArgsDef;
+
+const coord = defineCommand({
+  meta: { name: "coord", description: "Run the coordinator (the queue, placement and reports; it listens on coord.json's `listen`), or install it as a service with `wd coord install`." },
+  args: { ...config },
+  subCommands: {
+    install: defineCommand({
+      meta: { name: "install", description: "Install the coordinator on a machine: copy or build the binary into ~/.local/bin, write coord.json with a random caller token unless one exists, start the wd-coord service (systemd user unit, or LaunchAgent on macOS), and write this machine's client.json unless one exists." },
+      args: { ...target, listen: { type: "string", valueHint: "ip:port", description: "Address to listen on (default: the machine's Tailscale IPv4, else 127.0.0.1, port 7780)" } },
+      async run({ args }) { await (await import("./install.ts")).coordInstall(args.target, { listen: args.listen }); },
+    }),
+  },
+  async run({ rawArgs }) {
+    if (sub(rawArgs, coord)) return;   // citty runs a command's own run after its subcommand too
+    await (await import("../coord/main.ts")).coordMain(rawArgs);
+  },
+});
+
+const host = defineCommand({
+  meta: { name: "host", description: "Install agents on the machines that run threads." },
+  subCommands: {
+    install: defineCommand({
+      meta: { name: "install", description: "Install an agent: register the host with the coordinator in client.json, copy or build the binary, write agent.json (kept if it exists), copy gh's token for pushes, write client.json there if missing, start the wd-agent service, and wait for the host to be ok." },
+      args: {
+        ...target,
+        name: { type: "string", valueHint: "name", description: "Host name (default: the ssh host, or this machine's hostname for local)" },
+        label: { type: "string", valueHint: "label", description: "Label threads can require; repeat for several (default: the OS)" },
+        claude: { type: "string", valueHint: "path", description: "claude on the host (default: found on its login PATH)" },
+        "agent-url": { type: "string", valueHint: "url", description: "URL the coordinator reaches the agent at (default http://<tailscale ip>:7781)" },
+        "git-token-file": { type: "string", valueHint: "path", description: "GitHub token file on the host for pushes (default: written from gh auth token)" },
+        "coord-url": { type: "string", valueHint: "url", description: "Coordinator URL; with --host-token, skips registering" },
+        "host-token": { type: "string", valueHint: "token", description: "Host token for a host defined in coord.json" },
+      },
+      async run({ args, rawArgs }) {
+        const labels = many(rawArgs, "label");
+        await (await import("./install.ts")).hostInstall({
+          host: args.target, name: args.name, coordUrl: args["coord-url"], hostToken: args["host-token"], gitTokenFile: args["git-token-file"],
+          labels: labels.length ? labels : undefined, claude: args.claude, agentUrl: args["agent-url"] });
+      },
+    }),
+  },
+});
+
+const agent = defineCommand({
+  meta: { name: "agent", description: "Run the agent on this host: repo mirrors, worktrees, turns, pushes. Started by the wd-agent service that `wd host install` sets up." },
+  args: { ...config },
+  subCommands: {
+    probe: defineCommand({
+      meta: { name: "probe", description: "Print what the agent's probe sees (OS, memory, disk, claude, login) and exit 1 when it would refuse the host." },
+      args: { ...config },
+      async run({ rawArgs }) { return (await import("../agent/main.ts")).agentMain(["probe", ...rawArgs]); },
+    }),
+  },
+  async run({ rawArgs }) {
+    if (sub(rawArgs, agent)) return;
+    return (await import("../agent/main.ts")).agentMain(rawArgs);
+  },
+});
+
+const mcp = defineCommand({
+  meta: { name: "mcp", description: "Run the MCP server on stdio: the wd_* tools and the report channel for a Claude Code session. The plugin starts it." },
+  async run({ rawArgs }) { await (await import("../mcp/server.ts")).mcpMain(rawArgs); },
+});
+
+const initLocal = defineCommand({
+  meta: { name: "init-local", description: "Write coord.json, agent.json and client.json for a one-machine trial on 127.0.0.1 into <dir>, and print how to start it. Touches nothing in ~/.config/wd." },
+  args: {
+    dir: { type: "positional", required: true, valueHint: "dir", description: "An empty directory for the trial's config and data" },
+    "port-base": { type: "string", valueHint: "port", description: "Ports to use: this one and the next (default 17780)" },
+  },
+  async run({ args }) { (await import("./install.ts")).initLocal(args.dir, num(args["port-base"])); },
+});
+
+export const main = defineCommand({
+  meta: {
+    name: "wd", version: VERSION,
+    description: "Queue Claude Code threads, run them on your hosts, and get reports back. The coordinator's address and token come from WD_URL and WD_TOKEN, or ~/.config/wd/client.json (WD_CLIENT_CONFIG names another file).",
+  },
+  subCommands: {
+    submit, ls, status, send, cancel, release, tail: tailCmd, reports, ack: ackCmd, queue, hosts, repo,
+    coord, host, agent, mcp, "init-local": initLocal,
+  },
+});
+
+// The usage of the command a word list names (`wd repo add --help`), with its whole path in the usage line. citty colours
+// it whenever NO_COLOR is unset, so the colours are dropped when it does not go to a terminal.
+async function usage(argv: string[], tty = !!process.stdout.isTTY): Promise<string> {
+  let cmd: CommandDef<any> = main;
+  const path = ["wd"];
+  for (const w of argv.filter((a) => !a.startsWith("-"))) {
+    const subs = (cmd.subCommands ?? {}) as Record<string, CommandDef<any>>;
+    if (!Object.hasOwn(subs, w)) break;
+    cmd = subs[w];
+    path.push(w);
+  }
+  const text = await renderUsage(cmd, path.length > 1 ? { meta: { name: path.slice(0, -1).join(" "), version: VERSION } } : undefined);
+  return plain(text, tty);
+}
+const plain = (s: string, tty = !!process.stdout.isTTY) => (tty ? s : s.replace(/\x1b\[[0-9;]*m/g, ""));
+
 export async function cliMain(argv: string[]): Promise<number> {
   const isHook = argv.includes("--hook");
-  if (!argv.length || ["--help", "-h", "help"].includes(argv[0])) { console.log(USAGE); return 0; }
+  if (!argv.length || argv[0] === "help" || argv.includes("--help") || argv.includes("-h")) {
+    console.log(await usage(argv[0] === "help" ? argv.slice(1) : argv));
+    return 0;
+  }
   try {
-    const { values: v, positionals: [cmd, ...p] } = parseArgs({ args: argv, options: OPTS, allowPositionals: true });
-    const cfg = loadCfg();
-    if (v.caller) cfg.caller = v.caller;
-    switch (cmd) {
-      case "submit": {
-        const [repo, ...rest] = p;
-        const prompt = rest.join(" ") === "-" ? await Bun.stdin.text() : rest.join(" ");
-        if (!repo || !prompt.trim()) throw new Error("submit needs <repo> and a prompt");
-        json(await call(cfg, "POST", "/threads", {
-          caller: cfg.caller, repo, prompt, ref: v.ref, model: v.model, requires: v.require, size: v.size, priority: v.priority,
-          ttlHours: v.ttl ? Number(v.ttl) : undefined, tag: v.tag, branch: v.branch,
-        }));
-        return 0;
-      }
-      case "ls":
-        for (const t of (await call(cfg, "GET", `/threads${qs({ caller: v.all ? undefined : cfg.caller })}`)) as ThreadView[])
-          console.log([t.id, t.state, t.host ?? "-", t.repo, t.branch, t.tag ?? "", t.reason ?? ""].join("\t"));
-        return 0;
-      case "status": json(await call(cfg, "GET", `/threads/${need(p[0])}${v.full ? "?full=1" : ""}`)); return 0;
-      case "send": json(await call(cfg, "POST", `/threads/${need(p[0])}/send`, { text: p.slice(1).join(" ") })); return 0;
-      case "cancel":
-      case "release": json(await call(cfg, "POST", `/threads/${need(p[0])}/${cmd}`)); return 0;
-      case "hosts":
-        for (const h of (await call(cfg, "GET", `/hosts${v.repo ? qs({ repo: v.repo }) : ""}`)) as HostView[])
-          console.log([h.name, h.state, `run=${h.running}/${h.maxThreads}`, `mem=${h.memAvailMb}/${h.memTotalMb}MB`, `disk=${h.diskFreePct}%`,
-            ...(v.repo ? [h.why ? `${v.repo}: ${h.why}` : `${v.repo}: eligible`] : []),
-            h.reason ?? "", h.doctorFailed?.length ? `doctor fails: ${h.doctorFailed.join(",")}` : ""].filter(Boolean).join("\t"));
-        return 0;
-      case "queue": {
-        const q: QueueView = await call(cfg, "GET", "/queue");
-        if (v.json) json(q); else console.log(queueText(q));
-        return 0;
-      }
-      case "tail": await tail(cfg, need(p[0]), v); return 0;
-      case "reports":
-        if (v.hook) { await hook(cfg, v.event ?? "UserPromptSubmit", v.after); return 0; }
-        json(v.wait ? await waitReports(cfg, v.after) : await call(cfg, "GET", `/reports${qs({ caller: cfg.caller, after: v.after })}`));
-        return 0;
-      case "ack": for (const id of p) await ack(cfg, Number(id)); return 0;
-      case "repo": {
-        const id = p[1] && encodeURIComponent(p[1]);
-        if (p[0] === "add" && id) {
-          const r = await call(cfg, "PUT", `/repos/${id}`, { url: v.url ?? `https://github.com/${p[1]}.git`, defaultRef: v.ref, doctor: v.doctor, requires: v.require, rust: v.rust });
-          json(r);
-          if (r.source === "config") console.error(`wd: ${p[1]} is defined in coord.json, which wins: nothing was changed`);
-        } else if (p[0] === "rm" && id) json(await call(cfg, "DELETE", `/repos/${id}`));
-        else if (p[0] === "ls") for (const r of (await call(cfg, "GET", "/repos")) as any[])
-          console.log([r.id, r.url, r.defaultRef, r.doctor ?? "", r.requires.join(","), r.rust ? "rust" : "", r.source].join("\t"));
-        else throw new Error("usage: wd repo add <owner/name> [...] | repo ls | repo rm <id>");
-        return 0;
-      }
-      case "coord": {
-        if (p[0] !== "install" || !p[1]) throw new Error("usage: wd coord install <ssh-host|local> [--listen addr]");
-        await (await import("./install.ts")).coordInstall(p[1], { listen: v.listen });
-        return 0;
-      }
-      case "host": {
-        if (p[0] !== "install" || !p[1]) throw new Error("usage: wd host install <ssh-host|local> [options]");
-        await (await import("./install.ts")).hostInstall({
-          host: p[1], name: v.name, coordUrl: v["coord-url"], hostToken: v["host-token"], gitTokenFile: v["git-token-file"], labels: v.label, claude: v.claude, agentUrl: v["agent-url"] });
-        return 0;
-      }
-      case "init-local":
-        if (!p[0]) throw new Error("usage: wd init-local <dir> [--port-base 17780]");
-        (await import("./install.ts")).initLocal(p[0], v["port-base"] ? Number(v["port-base"]) : undefined);
-        return 0;
-      default: console.error(USAGE); return cmd ? 2 : 0;
-    }
+    const code = (await runCommand(main, { rawArgs: argv })).result;   // only the agent returns one
+    return typeof code === "number" ? code : 0;
   } catch (e) {
     if (isHook) return 0;
+    if ((e as Error).name === "CLIError") {   // a usage mistake: unknown command, missing argument
+      console.error(`${await usage(argv, !!process.stderr.isTTY)}\n\nwd: ${plain((e as Error).message, !!process.stderr.isTTY)}`);
+      return 2;
+    }
     console.error(`wd: ${(e as Error).message}`);
     return 1;
   }
-}
-
-function need(s: string | undefined): string {
-  if (!s) throw new Error("missing thread id");
-  return s;
 }

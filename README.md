@@ -148,6 +148,8 @@ Use a shell where you do not later run the real installers, or `unset WD_CLIENT_
 
 ## Usage
 ### CLI
+`wd --help` lists the commands, and `wd <command> --help` (or `wd help <command>`) explains one with each of its options.
+
 ```sh
 wd submit acme/shop "Fix the failing date test in src/date.ts and commit the fix." --model sonnet --tag date-fix
 wd ls                       # this caller's threads

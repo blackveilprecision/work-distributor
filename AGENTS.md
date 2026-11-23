@@ -21,7 +21,7 @@ Before a change is done, run `bun test`, `bunx tsc --noEmit` and `bun run build`
 
 ## Rules
 - **Scope:** wd runs threads and reports on them. Planning, PR handling, merging, review and retries belong to the caller. Don't add them.
-- **Keep it small:** about 2,250 lines of non-test source in `src/` (`contrib/` is not counted). Write plain code with no frameworks, and add no npm dependencies beyond `@modelcontextprotocol/sdk`.
+- **Keep it small:** about 2,250 lines of non-test source in `src/` (`contrib/` is not counted). Write plain code with no frameworks, and add no npm dependencies beyond `@modelcontextprotocol/sdk` and `citty` (the CLI: every command in `src/cli/main.ts` is a citty command with a description and described args, which is what `wd <command> --help` prints).
 - **The coordinator is the only writer to SQLite.** The agent keeps its state as files in its data dir.
 - **Host tools:** the binary may rely only on `git`, `claude`, `systemd-run`/`systemctl` on Linux, `ps`/`kill` on macOS, and the user's bash or zsh, run once at start as an interactive login shell to read its PATH. No `flock`, `timeout`, GNU-only flags or `chmod --`, because macOS hosts don't have them. The installers run POSIX shell, `bash -l` (and the login shell with `-lic` to find `claude`), `curl` and, when present, `tailscale` and `gh` on the target; keep their commands to that.
 - **Epochs:** every message between agent and coordinator carries the epoch, and stale ones are refused. Don't add a path that pushes or reports without it.
