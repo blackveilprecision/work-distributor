@@ -10,18 +10,23 @@ The submitter never waits or polls. Reports arrive on their own: in a Claude Cod
 
 wd only runs work and reports on it. It does not plan, review, open PRs or merge. Those belong to whatever submits the work.
 
+```mermaid
+flowchart TB
+    orch["Orchestrator<br/>Claude session with the wd plugin, a service, or the CLI"]
+    coord["wd coord<br/>queue · placement · reports · SQLite"]
+    a1["wd agent (Linux)"]
+    a2["wd agent (Linux)"]
+    a3["wd agent (macOS)"]
+    origin[("git origin")]
+
+    orch -- "submit, send, cancel" --> coord
+    coord -. "reports: channel, hook, webhook" .-> orch
+    coord -- "start / stop" --> a1 & a2 & a3
+    a1 & a2 & a3 -. "heartbeats, events, turn ends" .-> coord
+    a1 & a2 & a3 -- "push work branch" --> origin
 ```
- orchestrator (Claude session + wd plugin, a service, or the CLI)
-        │ submit                              ▲ report (channel / hook / webhook)
-        ▼                                     │
- ┌──────────────── wd coord ─────────────────┐
- │ queue · placement · reports · SQLite      │
- └──────┬───────────────┬───────────────┬────┘
-        │ start/stop    │               │        ▲ heartbeats, events, turn ends
-        ▼               ▼               ▼        │
-   wd agent (Linux)  wd agent (Linux)  wd agent (macOS)
-   claude -p turns in worktrees, branch pushed to origin
-```
+
+Each agent runs `claude -p` turns in their own git worktrees and pushes the work branch to origin.
 
 ## How it works
 - **Coordinator (`wd coord`):** one process holding the queue in SQLite.
