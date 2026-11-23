@@ -1,0 +1,14 @@
+{
+  "name": "wd",
+  "version": "0.1.2",
+  "description": "Submit Claude Code threads to wd, a work distributor, and get their reports pushed back.",
+  "userConfig": {
+    "WD_BIN": {
+      "type": "string",
+      "title": "wd binary",
+      "description": "Path to the wd binary (default: wd on PATH)",
+      "default": "wd",
+      "required": false
+    }
+  }
+}

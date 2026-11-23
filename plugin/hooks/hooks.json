@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "${user_config.WD_BIN}", "args": ["reports", "--pending", "--hook", "--event", "SessionStart"], "timeout": 10 }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "${user_config.WD_BIN}", "args": ["reports", "--pending", "--hook", "--event", "UserPromptSubmit"], "timeout": 10 }] }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "wd": {
+      "command": "${user_config.WD_BIN}",
+      "args": ["mcp"],
+      "env": {
+        "MCP_PROTOCOL_NEGOTIATION": "legacy",
+        "WD_URL": "${WD_URL:-}",
+        "WD_TOKEN": "${WD_TOKEN:-}",
+        "WD_CALLER": "${WD_CALLER:-}"
+      }
+    }
+  }
+}

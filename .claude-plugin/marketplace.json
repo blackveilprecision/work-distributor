@@ -1,0 +1,11 @@
+{
+  "name": "wd",
+  "owner": { "name": "wd" },
+  "plugins": [
+    {
+      "name": "wd",
+      "source": "./plugin",
+      "description": "Submit Claude Code threads to wd and get their reports pushed back (MCP tools, channel, hooks, skill)."
+    }
+  ]
+}

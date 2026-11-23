@@ -1,0 +1,69 @@
+// What the host looks like right now, and whether it can run a session at all. Anything in `problems` refuses the host.
+import { existsSync, mkdirSync, readFileSync, statfsSync } from "node:fs";
+import { cpus, freemem, totalmem, userInfo } from "node:os";
+import type { Probe } from "../shared/types";
+import { type AgentConfig, run } from "./config";
+
+interface Login { at: number; ok: boolean; error: string | null; expires: number | null }
+let login: Login | null = null;
+export const resetLoginCache = () => { login = null; };
+
+// The login check costs a real (tiny) model call, so a good result is kept for an hour. A bad one is rechecked
+// after two minutes, so a fixed login is noticed without hammering.
+export async function loginCheck(cfg: AgentConfig): Promise<Login> {
+  if (login && Date.now() - login.at < (login.ok ? 3_600_000 : 120_000)) return login;
+  const user = process.env.USER ?? userInfo().username;
+  // The same fixed environment a turn gets (env -i): a login that only works from the agent's own env is no login.
+  const r = await run([cfg.claude, "-p", "ok", "--model", "haiku", "--output-format", "json", "--max-turns", "1"], {
+    cwd: cfg.dataDir, timeout: 120_000,
+    env: { HOME: process.env.HOME ?? userInfo().homedir, USER: user, LOGNAME: user, PATH: process.env.PATH },
+  });
+  let res: any = null;
+  try { const j = JSON.parse(r.out); res = Array.isArray(j) ? j.findLast((e) => e?.type === "result") : j; } catch {}
+  let error: string | null = null;
+  if (!res) error = `claude -p gave no result (exit ${r.code}): ${(r.err || r.out).slice(0, 300)}`;
+  else if (res.is_error || /not logged in/i.test(String(res.result))) error = String(res.result ?? "is_error").slice(0, 300);
+  const exp = Number(res?.credential_expires_at) || null;
+  login = { at: Date.now(), ok: !error, error, expires: exp && exp < 1e12 ? exp * 1000 : exp };
+  return login;
+}
+
+async function memAvailMb(): Promise<number> {
+  if (process.platform === "linux") {
+    const m = /MemAvailable:\s+(\d+) kB/.exec(readFileSync("/proc/meminfo", "utf8"));
+    if (m) return Math.round(Number(m[1]) / 1024);
+  } else {
+    // free + inactive + speculative pages are what the OS hands out without swapping
+    const v = (await run(["/usr/bin/vm_stat"], { timeout: 10_000 })).out;
+    const page = Number(/page size of (\d+) bytes/.exec(v)?.[1] ?? 16384);
+    const pages = ["Pages free", "Pages inactive", "Pages speculative"].reduce((s, k) => s + Number(new RegExp(`${k}:\\s+(\\d+)`).exec(v)?.[1] ?? 0), 0);
+    if (pages) return Math.round((pages * page) / 1048576);
+  }
+  return Math.round(freemem() / 1048576);
+}
+
+export async function probe(cfg: AgentConfig): Promise<Probe> {
+  mkdirSync(cfg.dataDir, { recursive: true });
+  const fs = statfsSync(cfg.dataDir);
+  const os = process.platform === "linux" ? "linux" : "darwin";
+  const problems: string[] = [];
+  const v = await run([cfg.claude, "--version"], { timeout: 20_000 });
+  const claudeVersion = v.ok ? v.out.split(/\s+/)[0] || null : null;
+  if (!claudeVersion) problems.push(`claude not runnable (${cfg.claude}): ${v.err.slice(0, 200)}`);
+  const lg = claudeVersion ? await loginCheck(cfg) : null;
+  if (lg && !lg.ok) problems.push(`claude login: ${lg.error}`);
+  const diskFreePct = Math.round((fs.bavail / fs.blocks) * 1000) / 10;
+  if (diskFreePct < 5) problems.push(`disk almost full (${diskFreePct}% free)`);
+  if (fs.files > 0 && fs.ffree / fs.files < 0.05) problems.push("inodes almost exhausted");
+  if (os === "linux") {
+    const user = process.env.USER ?? userInfo().username;
+    const l = await run(["loginctl", "show-user", user, "-p", "Linger"], { timeout: 10_000 });
+    if (!/Linger=yes/.test(l.out)) problems.push("systemd linger is off (loginctl enable-linger), the agent would stop at logout");
+    if (!existsSync("/sys/fs/cgroup/cgroup.controllers")) problems.push("cgroup v2 not available");
+  }
+  return {
+    os, cores: cpus().length, memTotalMb: Math.round(totalmem() / 1048576), memAvailMb: await memAvailMb(),
+    diskFreePct, diskFreeGb: Math.round((fs.bavail * fs.bsize) / 1e9), claudeVersion,
+    loginOk: !!lg?.ok, loginError: lg && !lg.ok ? lg.error : null, loginExpiresAt: lg?.expires ?? null, problems,
+  };
+}
