@@ -9,7 +9,8 @@ import { SWEEP_EVERY_MS, sweepOrphans } from "./sweep";
 import { type Active, type Ctx, tailTurn } from "./tail";
 import { ensureMirror, git, leaseTarget, prepareWorktree, releaseTarget, releaseWorktree, wtPath } from "./workspace";
 
-export const VERSION = "0.1.0";
+export { VERSION } from "../shared/version";
+import { VERSION } from "../shared/version";
 
 function track(ctx: Ctx, meta: ReturnType<typeof readMeta>) {
   const a: Active = { meta, cpuMs: 0, memPeakMb: 0, running: true, stale: false, done: Promise.resolve() };

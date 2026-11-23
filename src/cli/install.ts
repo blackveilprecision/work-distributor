@@ -6,6 +6,7 @@ import { homedir, hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { AGENT_PORT, COORD_PORT, type HostView } from "../shared/types.ts";
 import { call, clientConfigPath, loadCfg, type Cfg } from "./client.ts";
+import { VERSION } from "../shared/version.ts";
 
 export type Role = "agent" | "coord";
 
@@ -63,13 +64,16 @@ export interface Target {
   build(bunTarget: string, out: string): Promise<void>;       // compile wd for the target (always runs here)
 }
 
-// The build needs the source checkout: the repo this file is in, WD_SRC, or the current directory.
-function srcRoot(): string {
-  const root = [process.env.WD_SRC, join(import.meta.dir, "../.."), process.cwd()].find((d) => d && existsSync(join(d, "src/main.ts")));
-  if (!root) throw new Error("run from the wd source checkout (or set WD_SRC): the binary for the target is built from src/");
-  return root;
+// A source checkout to build the target's binary from: the repo this file is in, WD_SRC, or the current directory. An
+// installed wd (brew, a release download) has none.
+function srcRoot(): string | null {
+  return [process.env.WD_SRC, join(import.meta.dir, "../.."), process.cwd()].find((d) => d && existsSync(join(d, "src/main.ts"))) ?? null;
 }
-const build = (bunTarget: string, out: string) => run(["bun", "build", "--compile", `--target=${bunTarget}`, join(srcRoot(), "src/main.ts"), "--outfile", out]).then(() => {});
+const build = (bunTarget: string, out: string) => run(["bun", "build", "--compile", `--target=${bunTarget}`, join(srcRoot()!, "src/main.ts"), "--outfile", out]).then(() => {});
+
+// The release binary of a version for a platform. WD_RELEASES points a fork at its own releases.
+export const releaseUrl = (version: string, os: string, arch: string, base = process.env.WD_RELEASES || "https://github.com/blackveilprecision/work-distributor/releases/download") =>
+  `${base}/v${version}/wd-${os}-${arch}`;
 
 export const sshTarget = (host: string): Target => ({
   name: host, local: false, build,
@@ -101,11 +105,23 @@ async function facts(t: Target): Promise<Facts> {
   return { uname, home, loginPath, claude: claude?.trim() || undefined, tsIp: /^\d+\.\d+\.\d+\.\d+$/.test(ip?.trim() ?? "") ? ip.trim() : undefined };
 }
 
-async function pushBinary(t: Target, f: Facts): Promise<ReturnType<typeof targetFor>> {
-  const tg = targetFor(f.uname), bin = join(srcRoot(), "dist", `wd-${tg.os}-${tg.arch}`);
-  await t.build(tg.bun, bin);
+// From a source checkout the target's binary is built here. Without one, this wd copies itself to a target of its own
+// platform, and any other target downloads the release binary of this same version.
+async function pushBinary(t: Target, f: Facts, d: Deps, log: (s: string) => void): Promise<ReturnType<typeof targetFor>> {
+  const tg = targetFor(f.uname), src = d.source !== undefined ? d.source : srcRoot();
+  const self = d.self ?? { os: process.platform, arch: process.arch === "arm64" ? "arm64" : "x64", path: process.execPath };
   await t.sh("mkdir -p ~/.local/bin ~/.config/wd");
-  await t.copy(bin, ".local/bin/wd.new");
+  if (src) {
+    const bin = join(src, "dist", `wd-${tg.os}-${tg.arch}`);
+    await t.build(tg.bun, bin);
+    await t.copy(bin, ".local/bin/wd.new");
+  } else if (tg.os === self.os && tg.arch === self.arch) {
+    await t.copy(self.path, ".local/bin/wd.new");
+  } else {
+    const url = releaseUrl(VERSION, tg.os, tg.arch);
+    log(`downloading wd ${VERSION} for ${tg.os}-${tg.arch} on ${t.name}`);
+    await t.sh(`curl -fsSL -o ~/.local/bin/wd.new '${url}'`);
+  }
   await t.sh("chmod 755 ~/.local/bin/wd.new && mv ~/.local/bin/wd.new ~/.local/bin/wd");
   return tg;
 }
@@ -124,12 +140,15 @@ async function startService(t: Target, role: Role, os: "linux" | "darwin", home:
 const loginPathOf = (f: Facts, claude?: string) => [...new Set([`${f.home}/.local/bin`, claude && dirname(claude), ...f.loginPath.split(":")])].filter(Boolean).join(":");
 const sshName = (t: Target) => t.name.split("@").pop()!;
 const fileExists = async (t: Target, p: string) => (await t.sh(`test -f ${p} && echo yes || echo no`)).trim() === "yes";
-export interface Deps { log?: (s: string) => void; client?: Cfg; call?: typeof call; waitSec?: number; clientPath?: string; caller?: string; env?: Record<string, string | undefined> }
+export interface Deps {
+  log?: (s: string) => void; client?: Cfg; call?: typeof call; waitSec?: number; clientPath?: string; caller?: string; env?: Record<string, string | undefined>;
+  source?: string | null; self?: { os: string; arch: string; path: string };   // tests: where the binary comes from
+}
 
 // ---- wd coord install ----
 export async function coordInstall(host: string, o: { listen?: string } = {}, t: Target = openTarget(host), d: Deps = {}): Promise<void> {
   const log = d.log ?? console.log, f = await facts(t);
-  const tg = await pushBinary(t, f);
+  const tg = await pushBinary(t, f, d, log);
   let cfg: { listen?: string; callerToken: string };
   if (await fileExists(t, "~/.config/wd/coord.json")) {
     cfg = JSON.parse(await t.sh("cat ~/.config/wd/coord.json"));
@@ -191,7 +210,7 @@ export async function hostInstall(o: InstallOpts, t: Target = openTarget(o.host)
     if (!o.hostToken && !o.agentUrl && !t.local && !f.tsIp) throw new Error(`no Tailscale address found on ${t.name}, and an ssh name may not resolve from the coordinator: pass --agent-url http://<address the coordinator reaches it at>:${AGENT_PORT}`);
   }
   const agentUrl = o.agentUrl ?? `http://${f.tsIp ?? (t.local ? "127.0.0.1" : sshName(t))}:${AGENT_PORT}`;
-  const tg = await pushBinary(t, f);
+  const tg = await pushBinary(t, f, d, log);
   if (keep) log("kept the existing ~/.config/wd/agent.json on the host (delete it to register again)");
   else {
     if (!o.hostToken) {

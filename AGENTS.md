@@ -34,6 +34,11 @@ Before a change is done, run `bun test`, `bunx tsc --noEmit` and `bun run build`
 - **Tests on a shared host:** never run broad `pkill` or `tmux kill-server` there. Scope kills to the test's own temp dir or socket.
 - **Comments:** only where the why is not obvious.
 
+## Releasing
+1. Set `version` in `package.json` (it is what `wd --version` prints and what installers download), commit, and push to `main`.
+2. Tag it and push the tag: `git tag v<version> && git push origin v<version>`.
+3. `.github/workflows/release.yml` checks the tag against `package.json`, runs the checks, builds `wd-{darwin,linux}-{arm64,x64}`, publishes the GitHub release with `SHA256SUMS`, and commits `Formula/wd.rb` (from `scripts/formula.ts`) to `main`.
+
 ## Deploying a change
 1. Build the binaries.
 2. Copy them to `~/.local/bin/wd` on each host.

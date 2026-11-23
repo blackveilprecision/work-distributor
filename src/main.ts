@@ -3,7 +3,8 @@
 export {};
 const [cmd, ...rest] = process.argv.slice(2);
 
-switch (cmd === "coord" && rest[0] === "install" ? "cli" : cmd) {   // `wd coord install` is a CLI command, `wd coord` the daemon
+if (cmd === "--version" || cmd === "-V" || cmd === "version") console.log((await import("./shared/version.ts")).VERSION);
+else switch (cmd === "coord" && rest[0] === "install" ? "cli" : cmd) {   // `wd coord install` is a CLI command, `wd coord` the daemon
   case "coord":
     await (await import("./coord/main.ts")).coordMain(rest);
     break;

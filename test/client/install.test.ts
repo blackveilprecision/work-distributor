@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agentJson, coordInstall, hostInstall, initLocal, launchAgentPlist, systemdUnit, targetFor, type Target } from "../../src/cli/install.ts";
+import { agentJson, coordInstall, hostInstall, initLocal, launchAgentPlist, releaseUrl, systemdUnit, targetFor, type Target } from "../../src/cli/install.ts";
 
 test("systemd user unit runs the agent from the host's ~/.local/bin and restarts it", () => {
   const u = systemdUnit("/home/u");
@@ -237,4 +237,29 @@ test("host install: claude is also looked up in an interactive login shell, and 
   expect(f.log[0].stdin).toMatch(/li\(\) \{ "\$S" -lic /);
   await expect(hostInstall({ host: "box" }, fakeTarget({ claude: "" }).t, { client: { url: "http://c:1", token: "ct", caller: "" }, call: async () => ({ token: "t" }), log: () => {} }))
     .rejects.toThrow("claude not found");
+});
+
+test("without a source checkout: a target of this platform gets this very binary, any other downloads this version's release", async () => {
+  const pkg = await Bun.file(join(import.meta.dir, "../../package.json")).json();
+  const self = { os: "linux", arch: "x64", path: "/opt/brew/bin/wd" }, client = { url: "http://c:1", token: "ct", caller: "" };
+  const deps = (out: string[]) => ({ source: null, self, client, call: async () => [], waitSec: 0, log: (s: string) => out.push(s) });
+  const same = fakeTarget({ files: { "~/.config/wd/agent.json": "{}" } });
+  await hostInstall({ host: "box" }, same.t, deps([]));
+  expect(same.built).toEqual([]);
+  expect(same.copied).toEqual(["/opt/brew/bin/wd -> .local/bin/wd.new"]);
+  expect(same.log.some((l) => l.cmd.includes("curl"))).toBe(false);
+
+  const other = fakeTarget({ uname: "Darwin arm64", files: { "~/.config/wd/agent.json": "{}" } }), out: string[] = [];
+  await hostInstall({ host: "box" }, other.t, deps(out));
+  expect(other.built).toEqual([]);
+  expect(other.copied).toEqual([]);
+  const curl = other.log.find((l) => l.cmd.startsWith("curl"))!.cmd;
+  expect(curl).toBe(`curl -fsSL -o ~/.local/bin/wd.new 'https://github.com/blackveilprecision/work-distributor/releases/download/v${pkg.version}/wd-darwin-arm64'`);
+  expect(other.log.findIndex((l) => l.cmd.startsWith("chmod 755 ~/.local/bin/wd.new"))).toBeGreaterThan(other.log.findIndex((l) => l.cmd.startsWith("curl")));
+  expect(out).toContain(`downloading wd ${pkg.version} for darwin-arm64 on u@box`);
+  expect(releaseUrl("1.2.3", "linux", "arm64", "https://example.org/fork/releases/download")).toBe("https://example.org/fork/releases/download/v1.2.3/wd-linux-arm64");
+
+  const src = fakeTarget({ files: { "~/.config/wd/agent.json": "{}" } });   // a checkout still builds, as before
+  await hostInstall({ host: "box" }, src.t, { ...deps([]), source: "/src/wd" });
+  expect(src.built).toEqual(["bun-linux-x64 /src/wd/dist/wd-linux-x64"]);
 });

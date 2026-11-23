@@ -11,7 +11,7 @@ const USAGE = `usage: wd submit <repo> <prompt...|-> [--ref r] [--model m] [--re
        wd coord install <ssh-host|local> [--listen addr]      (the daemon itself: wd coord [--config file])
        wd host install <ssh-host|local> [--name n] [--label l]... [--claude path] [--agent-url u] [--git-token-file f] [--coord-url u --host-token t]
        wd init-local <dir> [--port-base 17780]      (config for a one-machine trial; then run wd coord / wd agent --config ...)
---caller <name> overrides WD_CALLER for any command.
+--caller <name> overrides WD_CALLER for any command. wd --version prints the version.
 env: WD_URL, WD_TOKEN, WD_CALLER (or ~/.config/wd/client.json {url, token, caller}; WD_CLIENT_CONFIG names another file)`;
 
 const OPTS = {

@@ -43,39 +43,53 @@ wd only runs work and reports on it. It does not plan, review, open PRs or merge
 
 The full protocol, the placement rules and the config reference are in [docs/how-it-works.md](docs/how-it-works.md).
 
+## Install
+On the machine you run the setup commands from (the other machines get the binary from the installers below):
+
+```sh
+# Homebrew (macOS, or Linux with Homebrew)
+brew tap blackveilprecision/wd https://github.com/blackveilprecision/work-distributor
+brew install blackveilprecision/wd/wd
+
+# or a release binary: wd-darwin-arm64, wd-darwin-x64, wd-linux-x64 or wd-linux-arm64
+curl -fsSL -o ~/.local/bin/wd https://github.com/blackveilprecision/work-distributor/releases/latest/download/wd-darwin-arm64
+chmod +x ~/.local/bin/wd
+
+# or from source, with Bun 1.3 or newer: `wd` below is then dist/wd
+git clone https://github.com/blackveilprecision/work-distributor && cd work-distributor
+bun install && bun run build && export PATH="$PWD/dist:$PATH"   # from a checkout; skip with an installed wd
+```
+
+From a source checkout, the installers build each machine's binary from it. An installed `wd` copies itself to machines of its own platform and has the others download the same version from the GitHub release.
+
 ## Requirements
-- [Bun](https://bun.sh) 1.3 or newer, on the machine you build and run the setup commands from. The other machines only need the compiled binary, which the installer builds and copies for them.
 - On every host that runs threads:
   - `git`;
   - a logged-in `claude` CLI that works headless (`claude -p "ok"` must succeed in a clean environment);
   - a GitHub login for pushes: `gh auth login` there (the installer copies its token), or pass `--git-token-file`.
 - For a host or coordinator other than the machine you are on: key-based `ssh <host>` that works without a prompt, and `scp`.
-- Linux hosts need systemd (the installer enables user lingering). macOS hosts run wd as a LaunchAgent in the logged-in user's session, which is what gives `claude` access to its keychain login, so someone must be logged in there.
+- Linux hosts need systemd (the installer enables user lingering). WSL2 works as a Linux host for the coordinator or an agent once systemd is on (`[boot]` `systemd=true` in `/etc/wsl.conf`, then `wsl --shutdown`) and the other machines can reach it: run Tailscale inside WSL, or use WSL's mirrored networking. A Windows machine that sleeps takes WSL with it, so it suits the coordinator or an agent only if it stays awake. macOS hosts run wd as a LaunchAgent in the logged-in user's session, which is what gives `claude` access to its keychain login, so someone must be logged in there.
 - The machines must reach each other, for example over Tailscale. wd uses bearer tokens but no TLS, so keep it on a private network. With Tailscale running, the installers pick each machine's tailnet address by themselves.
 
 ## Setup
-Run these from the repo root, in order. `<ssh-host>` is anything `ssh` accepts; the word `local` means this machine and needs no ssh.
+Run these in order, with `wd` installed as above. `<ssh-host>` is anything `ssh` accepts; the word `local` means this machine and needs no ssh.
 
 ```sh
-# 1. Build wd. `wd` below is dist/wd (copy it to ~/.local/bin/wd to keep it; the plugin needs wd on PATH).
-bun install && bun run build
-export PATH="$PWD/dist:$PATH"
-
-# 2. Install the coordinator on one always-on machine.
+# 1. Install the coordinator on one always-on machine.
 wd coord install <ssh-host|local> [--listen <ip>:7780]
 
-# 3. Register the repos threads may run on.
+# 2. Register the repos threads may run on.
 wd repo add acme/shop --doctor "bun --version"
 
-# 4. Install an agent on every machine that should run threads (this one included, with `local`).
+# 3. Install an agent on every machine that should run threads (this one included, with `local`).
 wd host install <ssh-host|local> [--label gpu]...
 wd hosts                    # each host should say ok, or give the reason it was refused
 wd hosts --repo acme/shop   # per host: eligible, or why its threads would not go there (a failing doctor, no room, ...)
 
-# 5. Install the plugin for the Claude Code sessions that will submit work. It runs `wd mcp`, so `wd` must be on PATH in
-#    those sessions (the `local` installs above already put it in ~/.local/bin; otherwise copy dist/wd there).
+# 4. Install the plugin for the Claude Code sessions that will submit work. It runs `wd mcp`, so `wd` must be on PATH in
+#    those sessions (brew's, or ~/.local/bin, where the `local` installs above put it).
 #    See "From a Claude Code session" for what the flag does.
-claude plugin marketplace add "$PWD"
+claude plugin marketplace add blackveilprecision/work-distributor   # or the path of a checkout
 claude plugin install wd@wd
 claude --dangerously-load-development-channels plugin:wd@wd
 ```
@@ -100,7 +114,7 @@ Everything on this machine, on `127.0.0.1` and its own data directory. It does n
 
 ```sh
 D=~/wd-trial
-bun install && bun run build && export PATH="$PWD/dist:$PATH"
+bun install && bun run build && export PATH="$PWD/dist:$PATH"   # from a checkout; skip with an installed wd
 wd init-local $D                          # writes coord.json, agent.json and client.json there, and prints these commands
 export WD_CLIENT_CONFIG=$D/client.json    # now, before any other wd command: without it wd talks to ~/.config/wd, a real install if you have one
 nohup wd coord --config $D/coord.json >$D/coord.log 2>&1 & echo $! >$D/coord.pid
@@ -166,7 +180,7 @@ It also brings a short skill. Reports reach the session in two ways:
 - **Channel:** pushed into the session as `<channel source="wd">` events, which wake an idle session.
 - **Hook backup:** on the next prompt, any report that wasn't acknowledged is added to the context.
 
-Step 5 of Setup installs it and starts a session with it.
+Step 4 of Setup installs it and starts a session with it.
 - Channels are a Claude Code research preview. A plugin outside the allowlist needs this flag, and a confirmation prompt appears on start.
 - Without the flag, the tools and the hook still work; reports just arrive on your next prompt instead of waking the session.
 - Headless `claude -p` sessions can't receive channel events.

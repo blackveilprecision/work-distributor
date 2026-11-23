@@ -91,3 +91,11 @@ test("reports --wait fails at once on a bad token", async () => {
   process.env.WD_TOKEN = "bad";
   expect(await cliMain(["reports", "--wait"])).toBe(1);
 });
+
+test("wd --version prints the package.json version (what a release tag must match)", async () => {
+  const pkg = await Bun.file(new URL("../../package.json", import.meta.url).pathname).json();
+  for (const flag of ["--version", "-V", "version"]) {
+    const r = Bun.spawnSync([process.execPath, new URL("../../src/main.ts", import.meta.url).pathname, flag]);
+    expect(r.stdout.toString().trim()).toBe(pkg.version);
+  }
+});
