@@ -353,6 +353,29 @@ async function usage(argv: string[], tty = !!process.stdout.isTTY): Promise<stri
   const text = await renderUsage(cmd, path.length > 1 ? { meta: { name: path.slice(0, -1).join(" "), version: VERSION } } : undefined);
   return plain(text, tty);
 }
+// citty accepts any flag, so a mistyped one (--requre) would be silently ignored: the first flag the command does not
+// define, or null. Words after `--` are left alone.
+function unknownFlag(argv: string[]): string | null {
+  let cmd: CommandDef<any> = main;
+  for (const w of argv.filter((a) => !a.startsWith("-"))) {
+    const subs = (cmd.subCommands ?? {}) as Record<string, CommandDef<any>>;
+    if (!Object.hasOwn(subs, w)) break;
+    cmd = subs[w];
+  }
+  const known = new Set(["help", "h"]);
+  for (const [name, def] of Object.entries((cmd.args ?? {}) as ArgsDef)) {
+    known.add(name);
+    for (const a of [(def as any).alias ?? []].flat()) known.add(a);
+  }
+  for (const a of argv) {
+    if (a === "--") break;
+    if (!a.startsWith("-") || a === "-") continue;
+    const name = a.replace(/^--?/, "").split("=")[0];
+    if (!known.has(name) && !known.has(name.replace(/^no-/, ""))) return a;
+  }
+  return null;
+}
+
 const plain = (s: string, tty = !!process.stdout.isTTY) => (tty ? s : s.replace(/\x1b\[[0-9;]*m/g, ""));
 
 export async function cliMain(argv: string[]): Promise<number> {
@@ -360,6 +383,12 @@ export async function cliMain(argv: string[]): Promise<number> {
   if (!argv.length || argv[0] === "help" || argv.includes("--help") || argv.includes("-h")) {
     console.log(await usage(argv[0] === "help" ? argv.slice(1) : argv));
     return 0;
+  }
+  const bad = unknownFlag(argv);
+  if (bad) {
+    if (isHook) return 0;
+    console.error(`${await usage(argv, !!process.stderr.isTTY)}\n\nwd: unknown option ${bad}`);
+    return 2;
   }
   try {
     const code = (await runCommand(main, { rawArgs: argv })).result;   // only the agent returns one

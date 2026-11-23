@@ -128,3 +128,18 @@ test("repeated flags keep every value, and flags may follow the words", async ()
   expect(await cliMain(["send", "th1", "more", "--caller", "other"])).toBe(0);
   expect(coord.reqs.at(-1)).toMatchObject({ path: "/threads/th1/send", body: { text: "more" } });
 });
+
+test("an unknown or mistyped option is refused with the command's help, not silently ignored", async () => {
+  const errs: string[] = [];
+  (console.error as any).mockImplementation((...a: unknown[]) => { errs.push(a.join(" ")); });
+  expect(await cliMain(["submit", "o/r", "do", "it", "--requre", "gpu"])).toBe(2);
+  expect(errs.at(-1)).toMatch(/USAGE wd submit[\s\S]*wd: unknown option --requre$/);
+  expect(await cliMain(["repo", "add", "a/b", "--doctr=x"])).toBe(2);
+  expect(await cliMain(["tail", "th1", "-x"])).toBe(2);
+  expect(coord.reqs).toEqual([]);
+  // defined flags in every spelling still work, and so do `-` (stdin) and words after `--`
+  expect(await cliMain(["submit", "o/r", "--", "--literally", "this"])).toBe(0);
+  expect(coord.reqs.at(-1)!.body.prompt).toBe("--literally this");
+  expect(await cliMain(["ls", "--all", "--caller=x"])).toBe(0);
+  expect(await cliMain(["reports", "--pending", "--hook", "--bogus"])).toBe(0);   // the hook never fails
+});

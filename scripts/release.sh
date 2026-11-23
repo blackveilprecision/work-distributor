@@ -22,5 +22,7 @@ for t in darwin-arm64 darwin-x64; do bun build --compile --target=bun-$t src/mai
 codesign --force --sign - dist/release/wd-darwin-arm64 dist/release/wd-darwin-x64
 [ "$(dist/release/wd-darwin-$( [ "$(uname -m)" = arm64 ] && echo arm64 || echo x64) --version)" = "$v" ]
 
+# The binaries are built from the working tree: refuse to publish them if it changed while the checks and builds ran.
+[ -z "$(git status --porcelain)" ] && [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "the tree changed during the release: not publishing"; exit 1; }
 gh release create "v$v" dist/release/wd-darwin-arm64 dist/release/wd-darwin-x64 --target "$(git rev-parse HEAD)" --title "wd $v" --generate-notes
 echo "released v$v with the macOS binaries; the release workflow adds the Linux ones and updates Formula/wd.rb"
