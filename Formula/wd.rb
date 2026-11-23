@@ -2,7 +2,6 @@
 class Wd < Formula
   desc "Queue that runs Claude Code threads across hosts and reports back"
   homepage "https://github.com/blackveilprecision/work-distributor"
-  version "0.1.0"
   license "MIT"
 
   on_macos do
