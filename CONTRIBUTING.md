@@ -29,7 +29,8 @@ want to see a change working with a real `claude`.
 - Add or change tests with the code. Tests run on macOS and Linux; keep the host tools to the ones AGENTS.md lists.
 - Keep it small: plain code, no frameworks, no new npm dependencies. Comments only where the reason is not obvious.
 - Update the README and docs/how-it-works.md when behaviour, commands or the API change.
-- `bun test`, `bunx tsc --noEmit` and `bun run build` must pass; CI runs the same three.
+- `bun test`, `bunx tsc --noEmit` and `bun run build` must pass. CI runs tsc, the build and the coordinator and client
+  tests on Linux; the agent and end-to-end tests need macOS, so run the full `bun test` yourself.
 
 ## Pull requests
 One topic per pull request, with a description of what changed, why, and how you checked it. If it changes how wd

@@ -6,8 +6,9 @@ on:
 
 jobs:
   check:
-    # The tests run on macOS (the systemd path is covered by argument-building tests); see AGENTS.md.
-    runs-on: macos-latest
+    # Hosted macOS runners are too scarce to rely on, so CI runs what does not depend on the host's process manager on
+    # Linux. The agent and end-to-end tests need macOS (see AGENTS.md); run the full `bun test` there before a change is done.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -15,5 +16,5 @@ jobs:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
       - run: bunx tsc --noEmit
-      - run: bun test
+      - run: bun test test/coord test/client
       - run: bun run build

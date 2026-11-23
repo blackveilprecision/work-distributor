@@ -36,8 +36,10 @@ Before a change is done, run `bun test`, `bunx tsc --noEmit` and `bun run build`
 
 ## Releasing
 1. Set `version` in `package.json` (it is what `wd --version` prints and what installers download), commit, and push to `main`.
-2. Tag it and push the tag: `git tag v<version> && git push origin v<version>`.
-3. `.github/workflows/release.yml` checks the tag against `package.json`, runs the checks, builds `wd-{darwin,linux}-{arm64,x64}`, publishes the GitHub release with `SHA256SUMS`, and commits `Formula/wd.rb` (from `scripts/formula.ts`) to `main`.
+2. On a Mac, run `scripts/release.sh`. It checks the tree, runs the checks, builds and signs the macOS binaries and publishes the GitHub release `v<version>` with them. Hosted macOS runners are too scarce to rely on, so this step is local.
+3. Publishing starts `.github/workflows/release.yml` on Linux: it adds `wd-linux-{x64,arm64}` and `SHA256SUMS` to the release and commits `Formula/wd.rb` (from `scripts/formula.ts`) to `main`.
+
+CI (`.github/workflows/ci.yml`) runs tsc, the build and the coordinator and client tests on Linux; the full suite is yours to run on macOS.
 
 ## Deploying a change
 1. Build the binaries.
