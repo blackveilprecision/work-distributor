@@ -10,7 +10,8 @@ const ago = (t: number) => { const m = Math.round((Date.now() - t) / 60_000); re
 const clock = (t: number) => (t ? new Date(t).toTimeString().slice(0, 8) : "--:--:--");
 export const stepLines = (r: Steps) => r.steps.map((s) => `${clock(s.at)}  ${s.text}`);
 
-// citty keeps only the last value of a repeated flag; these flags may be given several times.
+// citty keeps only the last value of a repeated flag and has no way to ask for all of them (unjs/citty#258; the `multiple`
+// modifier in #259 was not merged), so the flags that may be repeated are read from the raw arguments.
 const many = (raw: string[], flag: string) =>
   raw.flatMap((a, i) => (a === `--${flag}` && raw[i + 1] !== undefined ? [raw[i + 1]] : a.startsWith(`--${flag}=`) ? [a.slice(flag.length + 3)] : []));
 const num = (s: unknown) => (typeof s === "string" && s !== "" ? Number(s) : undefined);
