@@ -14,7 +14,7 @@ export interface SubmitRequest {
   ref?: string;              // base ref, default the repo's default branch
   prompt: string;
   model?: string;            // passed to claude --model
-  requires?: string[];       // host labels that must all be present
+  requires?: string[];       // host labels that must all be present; every host also has its own name as a label
   size?: "small" | "heavy";  // only a hint until p90 estimates exist
   priority?: boolean;
   ttlHours?: number;         // worktree kept this long after the last turn, default 24

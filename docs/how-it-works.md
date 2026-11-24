@@ -31,7 +31,7 @@ States: `queued → running → idle → done`, with side exits `failed`, `lost`
 ## Placement
 The scheduler ticks every `tickMs` (default 5 s). It considers queued threads with priority threads first, then oldest first. A host qualifies when all of these hold:
 - its state is `ok`;
-- it has every label the thread `requires`;
+- it has every label the thread `requires` (a host's own name counts as a label, so `requires: ["bazzite"]` pins a thread to bazzite);
 - the repo's `doctor` command passed on it. The coordinator asks the agent to run the doctor when the host first appears, again after 24 h, and after 10 min if it failed. The doctor runs with the same PATH as the turns (see Running a turn);
 - its running turns are fewer than its `maxThreads`;
 - its free disk is at least `floors.diskFreePct` (default 15%);
@@ -175,7 +175,7 @@ Hosts and repos can be listed in `coord.json` or registered through the caller A
 | `name`, `coordUrl`, `token` | required | must match the coordinator's `hosts` entry |
 | `listen` | `0.0.0.0:7781` | `host install` binds it to the host's Tailscale address |
 | `claude` | `claude` | path to the CLI |
-| `labels` | `[]` | labels threads can require |
+| `labels` | `[]` | labels threads can require, besides the host's name |
 | `maxThreads` | 4 | concurrent turns |
 | `dataDir` | `~/.wd` | mirrors, worktrees, turns, target dirs |
 | `gitTokenFile` | | GitHub token used for pushes |

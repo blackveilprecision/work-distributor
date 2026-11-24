@@ -369,7 +369,7 @@ export class Scheduler {
   private fit(t: Pick<ThreadRow, "repo" | "requires">, est: number, h: HostRow): number | string {
     if (h.state !== "ok") return h.reason ? `${h.state}: ${h.reason}` : h.state;
     const repo = this.repo(t.repo), need: string[] = [...JSON.parse(t.requires), ...(repo?.requires ?? [])];   // no repo: launch fails the thread
-    const hb = JSON.parse(h.hb) as Heartbeat, p = hb.probe, labels = hb.labels ?? this.hostCfg(h.name)?.labels ?? [], f = this.cfg.floors;
+    const hb = JSON.parse(h.hb) as Heartbeat, p = hb.probe, labels = [h.name, ...(hb.labels ?? this.hostCfg(h.name)?.labels ?? [])], f = this.cfg.floors;   // a host's name is a label, so requires can pin a host
     const missing = need.filter((l) => !labels.includes(l));
     if (missing.length) return `lacks label ${missing.join(",")}`;
     const doc = repo?.doctor ? this.db.get<{ ok: number; output: string }>("SELECT ok,output FROM doctor WHERE host=? AND repo=?", h.name, t.repo) : null;

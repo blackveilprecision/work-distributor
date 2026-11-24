@@ -135,6 +135,16 @@ describe("placement", () => {
     expect(h.db.turn(t3, 1)!.est_mb).toBeGreaterThan(6000);
   });
 
+  test("a host's name is a label, so requires pins a thread to that host", async () => {
+    const h = harness();
+    await ready(h, ["a"], { memAvailMb: 30000 });
+    await ready(h, ["b"], { memAvailMb: 9000 });
+    const pinned = submit(h, { requires: ["b"] }), free = submit(h);
+    await h.sched.tick();
+    expect(h.db.thread(pinned)!.host).toBe("b");
+    expect(h.db.thread(free)!.host).toBe("a");   // most free memory
+  });
+
   test("refused hosts (login problem) never get work", async () => {
     const h = harness();
     await ready(h, ["a"], { loginOk: false });

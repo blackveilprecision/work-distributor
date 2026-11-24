@@ -30,7 +30,7 @@ Each agent runs `claude -p` turns in their own git worktrees and pushes the work
 
 ## How it works
 - **Coordinator (`wd coord`):** one process holding the queue in SQLite.
-  - Every few seconds it places queued threads. Each thread goes to the host with the most free memory, among hosts that have every label the thread requires, pass the repo's doctor check, are below their thread limit, and stay above the disk and memory floors.
+  - Every few seconds it places queued threads. Each thread goes to the host with the most free memory, among hosts that have every label the thread requires (each host's name is one of its labels, so `requires: ["bazzite"]` pins a thread), pass the repo's doctor check, are below their thread limit, and stay above the disk and memory floors.
   - It stores reports until they are acknowledged.
 - **Agent (`wd agent`):** one per host.
   - It keeps a mirror of each repo and creates a worktree per thread.
