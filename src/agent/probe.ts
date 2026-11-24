@@ -4,15 +4,17 @@ import { cpus, freemem, loadavg, totalmem, userInfo } from "node:os";
 import type { Probe } from "../shared/types";
 import { type AgentConfig, run } from "./config";
 
-interface Login { at: number; ok: boolean; error: string | null; expires: number | null }
-let login: Login | null = null;
-export const resetLoginCache = () => { login = null; };
+interface Login { at: number; ok: boolean; error: string | null; expires: number | null; claude: string }
+let login: Login | null = null, gen = 0;
+// A check still running when the cache is reset must not store its (now stale) result afterwards, and a result is
+// only reused for the claude it checked (several agents share this module in tests).
+export const resetLoginCache = () => { login = null; gen++; };
 
 // The login check costs a real (tiny) model call, so a good result is kept for an hour. A bad one is rechecked
 // after two minutes, so a fixed login is noticed without hammering.
 export async function loginCheck(cfg: AgentConfig): Promise<Login> {
-  if (login && Date.now() - login.at < (login.ok ? 3_600_000 : 120_000)) return login;
-  const user = process.env.USER ?? userInfo().username;
+  if (login && login.claude === cfg.claude && Date.now() - login.at < (login.ok ? 3_600_000 : 120_000)) return login;
+  const user = process.env.USER ?? userInfo().username, mine = gen;
   // The same fixed environment a turn gets (env -i): a login that only works from the agent's own env is no login.
   const r = await run([cfg.claude, "-p", "ok", "--model", "haiku", "--output-format", "json", "--max-turns", "1"], {
     cwd: cfg.dataDir, timeout: 120_000,
@@ -24,8 +26,9 @@ export async function loginCheck(cfg: AgentConfig): Promise<Login> {
   if (!res) error = `claude -p gave no result (exit ${r.code}): ${(r.err || r.out).slice(0, 300)}`;
   else if (res.is_error || /not logged in/i.test(String(res.result))) error = String(res.result ?? "is_error").slice(0, 300);
   const exp = Number(res?.credential_expires_at) || null;
-  login = { at: Date.now(), ok: !error, error, expires: exp && exp < 1e12 ? exp * 1000 : exp };
-  return login;
+  const l = { at: Date.now(), ok: !error, error, expires: exp && exp < 1e12 ? exp * 1000 : exp, claude: cfg.claude };
+  if (mine === gen) login = l;
+  return l;
 }
 
 async function memAvailMb(): Promise<number> {
