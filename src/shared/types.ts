@@ -96,7 +96,7 @@ export interface DoctorResult { ok: boolean; output: string }   // output tail, 
 export interface Probe {
   os: "linux" | "darwin"; cores: number; memTotalMb: number; memAvailMb: number;
   diskFreePct: number; diskFreeGb: number;
-  load1?: number; cpuScore?: number;   // absent from agents before 0.4
+  load1?: number; cpuScore?: number;   // absent from agents before 0.4.0
   claudeVersion: string | null; loginOk: boolean; loginError: string | null; loginExpiresAt: number | null;
   problems: string[];          // anything that should refuse the host, human readable
 }
