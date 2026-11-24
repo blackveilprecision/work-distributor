@@ -202,8 +202,12 @@ export class Scheduler {
       this.reports.add(b.thread, "turn", { ...o, isError: r.isError, reason });
       return true;
     }
+    // The cap is per turn, so an oom says nothing about the host's free memory; name the cap and what was running.
+    const last = b.kind === "oom" ? steps(this.db, b.thread, b.turn, { n: 1, results: false }).steps[0]?.text : undefined;
+    const oom = `oom: the turn reached its ${u.mem_max} MB memory cap (2x its ${u.est_mb} MB estimate; the host's free memory is not the limit)`
+      + (last ? `; running: ${last}` : "") + (tail ? `; ${tail}` : "");
     const fail: Record<string, [ThreadState, string]> = {
-      exited: ["failed", `exit ${b.exitCode} without a result: ${tail}`], oom: ["failed", `oom: ${tail}`],
+      exited: ["failed", `exit ${b.exitCode} without a result: ${tail}`], oom: ["failed", oom],
       timeout: ["failed", "cap: runtime limit reached"], killed: ["failed", "killed"],
       "launch-failed": ["failed", tail || "launch failed"],
     };

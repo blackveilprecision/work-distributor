@@ -124,9 +124,12 @@ describe("placement", () => {
     const t2 = submit(h);
     await h.sched.tick();
     expect(h.db.turn(t2, 1)!.est_mb).toBe(6000);
+    const line = JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: "bun -e 'for(;;)a.push(1)'" } }] } });
+    h.sched.onEvents({ host: "a", thread: t2, epoch: 1, turn: 1, offset: 0, lines: [line], nextOffset: line.length + 1 });
     h.sched.onTurnEnd(turnEnd("a", t2, 1, 1, { kind: "oom", result: null, memPeakMb: 100 }));
     expect(state(h, t2)).toBe("failed");
-    expect(h.db.thread(t2)!.reason).toContain("oom");
+    expect(h.db.thread(t2)!.reason).toBe("oom: the turn reached its 12000 MB memory cap (2x its 6000 MB estimate; the host's free memory is not the limit)"
+      + "; running: Bash: bun -e 'for(;;)a.push(1)'");
     const t3 = submit(h);
     await h.sched.tick();
     expect(h.db.turn(t3, 1)!.est_mb).toBeGreaterThan(6000);
