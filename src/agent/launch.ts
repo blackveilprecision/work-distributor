@@ -190,7 +190,7 @@ export async function status(meta: TurnMeta): Promise<Status> {
     return { running: unitRunning(u), cpuMs: (u?.cpuMs ?? 0) + o.cpuMs, memMb: (u?.memMb ?? 0) + o.memMb };
   }
   const { rows } = await groupProcs(meta);
-  return { running: rows.length > 0, cpuMs: cpuCounter(meta.key, rows), memMb: rows.reduce((s, p) => s + p.rssKb, 0) / 1024 };
+  return { running: rows.length > 0, cpuMs: cpuCounter(meta.key, rows, true), memMb: rows.reduce((s, p) => s + p.rssKb, 0) / 1024 };
 }
 
 // The reason file is written before any kill, so the ending is classified as ours and not as a crash.

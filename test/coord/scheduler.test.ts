@@ -125,9 +125,11 @@ describe("placement", () => {
     h.advance(61_000); h.sched.onHeartbeat(hb("a", { memAvailMb: 30000, units: unit(61_000) }));    // 1 core over the first minute
     h.advance(61_000); h.sched.onHeartbeat(hb("a", { memAvailMb: 30000, units: unit(244_000) }));   // 3 cores over the second
     expect(h.db.turn(t1, 1)).toMatchObject({ cpu_rate: 3, cpu_peak: 3, est_cpu: 0.5 });
+    h.advance(61_000); h.sched.onHeartbeat(hb("a", { memAvailMb: 30000, units: unit(244_000 + 61_000 * 40) }));   // a counter jump
+    expect(h.db.turn(t1, 1)).toMatchObject({ cpu_rate: 8, cpu_peak: 8 });   // capped at the host's 8 cores
     expect(h.sched.promisedCores("a")).toBe(0);   // using more than promised
     h.sched.onTurnEnd(turnEnd("a", t1, 1, 1));
-    expect(h.sched.estimate({ repo: "o/app", size: null })).toEqual({ mb: 2048, cores: 3 });
+    expect(h.sched.estimate({ repo: "o/app", size: null })).toEqual({ mb: 2048, cores: 8 });
     expect(h.sched.estimate({ repo: "o/rs", size: "heavy" })).toEqual({ mb: 8192, cores: 2 });
     // A turn shorter than a quarter window counts its average.
     const t2 = submit(h, { repo: "o/rs" });

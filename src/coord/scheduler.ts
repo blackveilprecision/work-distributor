@@ -144,7 +144,8 @@ export class Scheduler {
         u.memPeakMb, u.cpuMs, u.cpuMs !== cur.cpu_ms ? now : cur.last_activity, u.thread, u.turn);
       if (cur.cpu_at === null) this.db.run("UPDATE turns SET cpu_at=?, cpu_base=? WHERE thread=? AND n=?", now, u.cpuMs, u.thread, u.turn);
       else if (now - cur.cpu_at >= CPU_WINDOW_MS) {
-        const rate = Math.max(0, u.cpuMs - cur.cpu_base) / (now - cur.cpu_at);
+        // Never more than the host's cores: a counter that restarts can still report a jump.
+        const rate = Math.min(Math.max(0, u.cpuMs - cur.cpu_base) / (now - cur.cpu_at), p.cores || Infinity);
         this.db.run("UPDATE turns SET cpu_rate=?, cpu_peak=MAX(cpu_peak,?), cpu_at=?, cpu_base=? WHERE thread=? AND n=?", rate, rate, now, u.cpuMs, u.thread, u.turn);
       }
     }
@@ -193,8 +194,9 @@ export class Scheduler {
     // Wall time: claude's duration_ms leaves out time spent in tools.
     const cost = total - t.cost, secs = (now - u.started) / 1000;
     // The last partial window counts if it was at least a quarter of one; a turn shorter than that counts its average.
+    const cores = (JSON.parse(this.db.host(b.host)?.hb ?? "{}") as Partial<Heartbeat>).probe?.cores || Infinity;
     const part = u.cpu_at !== null && now - u.cpu_at >= CPU_WINDOW_MS / 4 ? Math.max(0, u.cpu_ms - u.cpu_base) / (now - u.cpu_at) : 0;
-    const cpuPeak = Math.max(u.cpu_peak, part, u.cpu_peak || part ? 0 : u.cpu_ms / Math.max(now - u.started, 1));
+    const cpuPeak = Math.min(cores, Math.max(u.cpu_peak, part, u.cpu_peak || part ? 0 : u.cpu_ms / Math.max(now - u.started, 1)));
     this.db.run("UPDATE turns SET ended=?, kind=?, cost=?, mem_peak=?, result=?, cpu_peak=? WHERE thread=? AND n=?",
       now, b.kind, cost, b.kind === "oom" ? Math.max(b.memPeakMb, u.mem_max) : b.memPeakMb, r?.text ?? null, cpuPeak, b.thread, b.turn);
     this.db.setThread(b.thread, { head: b.head ?? t.head, cost: total, last_message: r?.text ? r.text.slice(0, 4000) : t.last_message });
