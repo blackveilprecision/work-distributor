@@ -163,6 +163,7 @@ wd cancel <id>
 wd hosts [--repo <owner/name>]   # --repo: per host, why a thread of that repo would not start there
 wd queue [--json]           # every caller: queued threads and why they wait, pending follow-ups, idle threads,
                             # what runs on each host and the last thing each running thread did
+wd hold [--clear]           # the usage-limit hold from Claude's reset time; --clear ends it after an early reset
 wd tail <id> [-n 20] [--turn n] [-f]   # a turn's recent steps: tool calls, text, results; -f follows until it ends
 wd repo add <owner/name> [--url u] [--ref r] [--doctor cmd] [--require label]... [--rust]
 wd repo ls
