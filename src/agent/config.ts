@@ -5,6 +5,7 @@ import { basename, join } from "node:path";
 export interface AgentConfig {
   name: string; listen: string; coordUrl: string; token: string; dataDir: string; claude: string;
   labels: string[]; gitTokenFile?: string; maxThreads: number; targetDirPool: number;
+  autoUpdate?: boolean;   // false: keep this binary even when the coordinator runs a newer release
   path?: string;   // PATH for doctors and turns; without it, the host's interactive login shell's PATH (see loginPath)
   heartbeatSec: number; tailMs: number; pushEverySec: number;   // tuning knobs, tests shorten them
 }

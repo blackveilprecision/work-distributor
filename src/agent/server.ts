@@ -10,6 +10,7 @@ import { type Active, type Ctx, tailTurn } from "./tail";
 import { ensureMirror, git, leaseTarget, prepareWorktree, releaseTarget, releaseWorktree, wtPath } from "./workspace";
 
 export { VERSION } from "../shared/version";
+import { replaceBinary, wantUpdate } from "./update";
 import { VERSION } from "../shared/version";
 
 function track(ctx: Ctx, meta: ReturnType<typeof readMeta>) {
@@ -100,7 +101,16 @@ async function beat(ctx: Ctx) {
   const hb: Heartbeat = { host: cfg.name, agentVersion: VERSION, probe: p as Heartbeat["probe"], units, labels: cfg.labels, maxThreads: cfg.maxThreads };
   const r = await post(cfg, "/agent/heartbeat", hb);
   // The coordinator names turns whose epoch is stale or whose thread was cancelled; they die here.
-  if (r.status === 200) for (const st of (r.body as HeartbeatReply | null)?.stop ?? []) void stop(ctx, st);
+  if (r.status !== 200) return;
+  const reply = r.body as HeartbeatReply | null;
+  for (const st of reply?.stop ?? []) void stop(ctx, st);
+  if (!ctx.preparing.size && wantUpdate(reply?.version, cfg.autoUpdate)) {   // not while a worktree is being set up for a start
+    try {
+      await replaceBinary(reply!.version!, process.execPath);
+      console.error(`wd agent: updated ${VERSION} -> ${reply!.version}; exiting for the service manager to restart it`);
+      process.exit(0);
+    } catch (e) { console.error(`wd agent: update to ${reply!.version} failed (retrying in an hour):`, (e as Error).message); }
+  }
 }
 
 export async function startAgent(cfg: AgentConfig) {

@@ -26,7 +26,7 @@ describe("auth", () => {
     expect((await call("POST", "/agent/heartbeat", hb("a"), "ct")).status).toBe(401);
     expect((await call("POST", "/agent/heartbeat", hb("a"), "tb")).status).toBe(401);   // b's token, claiming a
     expect((await call("POST", "/agent/heartbeat", hb("zzz"), "ta")).status).toBe(401);
-    expect((await call("POST", "/agent/heartbeat", hb("a"), "ta")).body).toEqual({ stop: [] });
+    expect((await call("POST", "/agent/heartbeat", hb("a"), "ta")).body).toEqual({ stop: [], version: expect.any(String) });
     expect((await call("GET", "/healthz", undefined, "")).status).toBe(200);
   });
 });
@@ -272,5 +272,20 @@ describe("why a host gets no threads of a repo, and the whole of a long message"
     await call("POST", "/agent/turn-end", turnEnd("a", id, 2, 2), "ta");
     expect((await call("GET", "/reports?caller=orch:x")).body[1]).toMatchObject({ truncated: false, message: "done" });
     expect((await call("GET", `/threads/${id}?full=1`)).body).toMatchObject({ lastMessage: "done", messages: [{ turn: 1, text }, { turn: 2, text: "done" }] });
+  });
+});
+
+describe("mcp tools", () => {
+  test("the tool list and calls are served by the coordinator", async () => {
+    const { call } = api();
+    const tools = (await call("GET", "/mcp/tools")).body;
+    expect(tools.tools.map((t: any) => t.name)).toContain("wd_status");
+    expect((await call("POST", "/mcp/call", { name: "wd_hosts", arguments: {} })).status).toBe(400);   // no caller
+    expect((await call("POST", "/mcp/call", { name: "wd_nope", arguments: {}, caller: "c" })).status).toBe(404);
+    const sub = await call("POST", "/mcp/call", { name: "wd_submit", arguments: { repo: "o/app", prompt: "p".repeat(5000) }, caller: "c" });
+    expect(sub.status).toBe(200);
+    const ls = (await call("POST", "/mcp/call", { name: "wd_status", arguments: {}, caller: "c" })).body;
+    expect(ls).toEqual({ threads: [{ id: sub.body.id, tag: null, state: "queued", host: null, turns: 0, reason: null }], more: 0, note: expect.any(String) });
+    expect((await call("POST", "/mcp/call", { name: "wd_status", arguments: { thread: "zz" }, caller: "c" })).status).toBe(404);
   });
 });

@@ -65,11 +65,11 @@ export function queueText(q: QueueView): string {
 // The hook must never block the user's prompt: any failure prints nothing and exits 0.
 async function hook(cfg: Cfg, event: string, after?: string): Promise<void> {
   try {
-    const reports: Report[] = await call(cfg, "GET", `/reports${qs({ caller: cfg.caller, after })}`, undefined, 3000);
+    const reports: Report[] = await call(cfg, "GET", `/reports${qs({ caller: cfg.caller, after })}`, undefined, 3000, 0);
     if (!reports?.length) return;
     const ctx = `wd reports for ${cfg.caller} (already acknowledged; no wd_ack needed):\n\n` + reports.map(reportText).join("\n\n");
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: ctx } }));
-    await Promise.all(reports.map((r) => ack(cfg, r.id, 3000).catch(() => {})));
+    await Promise.all(reports.map((r) => ack(cfg, r.id, 3000, 0).catch(() => {})));
   } catch {}
 }
 

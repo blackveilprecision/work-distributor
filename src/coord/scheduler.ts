@@ -7,6 +7,7 @@ import type { Config, HostCfg, RepoCfg } from "./config";
 import { Db, threadView, type HostRow, type ThreadRow } from "./db";
 import type { Reports } from "./reports";
 import { steps } from "./steps";
+import { VERSION } from "../shared/version";
 
 export class HttpError extends Error { constructor(public status: number, msg: string) { super(msg); } }
 
@@ -137,7 +138,7 @@ export class Scheduler {
       this.db.run("UPDATE turns SET mem_peak=MAX(mem_peak,?), cpu_ms=?, last_activity=? WHERE thread=? AND n=?",
         u.memPeakMb, u.cpuMs, u.cpuMs !== cur.cpu_ms ? now : cur.last_activity, u.thread, u.turn);
     }
-    return { stop };
+    return { stop, version: VERSION };
   }
 
   // null means the epoch is stale (HTTP 409).

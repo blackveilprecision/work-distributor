@@ -8,7 +8,7 @@ The shared types for everything below are in [`src/shared/types.ts`](../src/shar
 | Coordinator | `src/coord/` | one host, `wd coord` | the SQLite database (the only writer), the caller API, the scheduler, reports |
 | Agent | `src/agent/` | every host, `wd agent` | repo mirrors, worktrees, turn processes, the event tailer, branch pushes |
 | CLI | `src/cli/` | anywhere | a thin client of the caller API, plus the installers: `wd coord install`, `wd host install`, `wd init-local` |
-| MCP server | `src/mcp/` | inside a Claude Code session, `wd mcp` | the `wd_*` tools and the report channel |
+| MCP server | `src/mcp/` | inside a Claude Code session, `wd mcp` | forwards the `wd_*` tools (defined in `src/coord/tools.ts`) and the report channel |
 | Plugin | `plugin/` | Claude Code | `.mcp.json`, the hooks and the skill |
 
 Everything is one binary (`src/main.ts`), compiled with `bun build --compile`.
@@ -96,6 +96,7 @@ Reports stay until acknowledged. There are four ways to get them:
 - **Polling or the CLI:** `GET /reports?caller=` or `wd reports --pending`. The caller acknowledges with `POST /reports/<id>/ack` or `wd ack`.
 - **Plugin:**
   - `wd mcp` holds the SSE stream open and turns each report into a `notifications/claude/channel` event, with meta `{report, thread, state, kind, tag}`. Pushing never acknowledges, because Claude Code silently drops channel events when the session was started without the channel flag. The agent calls `wd_ack` once it has acted on the report.
+  - The tools are not in `wd mcp`, which lives as long as its session: it lists them with `GET /mcp/tools` and runs them with `POST /mcp/call` `{name, arguments, caller}`, which maps each tool onto a caller route. When the report stream reconnects (after a coordinator restart) it lists them again and, if they changed, sends `notifications/tools/list_changed`. So a new coordinator changes the tools of every open session; only a change to `wd mcp` itself needs the session restarted.
   - The plugin's `SessionStart` and `UserPromptSubmit` hooks add any unacknowledged reports to the context and acknowledge them, so a report that missed the channel arrives with the next prompt.
 
 ## Failure handling
@@ -108,7 +109,7 @@ Reports stay until acknowledged. There are four ways to get them:
 | Out-of-memory kill or `RuntimeMaxSec` reached | `failed` with the cause |
 | Turn process vanished without exiting (host restart) | resumed once on the same host with "You were interrupted by a host restart"; a second time in a row gives `lost` |
 | Agent restart | nothing: turns keep running and the tailer picks them up |
-| Coordinator restart | nothing: agents buffer and resend events and turn ends |
+| Coordinator restart | nothing: agents buffer and resend events and turn ends; CLI and tool calls retry a refused connection for 20 seconds; the report stream reconnects |
 
 ## Cleanup
 - **Release:** `release`, an expired TTL, or a final thread 24 h old makes the agent remove the worktree and its tmp dir and free its target lease. The branch on origin stays. A `release` writes no report: the caller asked for it. A TTL expiry does write a `final` one.
@@ -180,5 +181,8 @@ Hosts and repos can be listed in `coord.json` or registered through the caller A
 | `gitTokenFile` | | GitHub token used for pushes |
 | `path` | the login shell's PATH | PATH for doctors and turns |
 | `targetDirPool` | 4 | Rust target dirs per repo |
+| `autoUpdate` | true | update to the coordinator's release (see below) |
+
+**Agent updates:** each heartbeat reply carries the coordinator's version. An agent on an older release downloads that release's binary for its platform from GitHub (`WD_RELEASES` overrides the base URL), checks it prints the version, renames it over its own binary and exits; systemd or launchd starts the new one, and running turns carry on. It waits while a worktree is being prepared, and a failed download is retried an hour later. Agents run from source, and agents with `"autoUpdate": false`, never update. So deploying a release is `wd coord install`; the hosts follow within a heartbeat.
 
 **Client:** `~/.config/wd/client.json` `{url, token, caller}` (or the file named by `WD_CLIENT_CONFIG`), or `WD_URL`, `WD_TOKEN` and `WD_CALLER`, which win over the file. With no caller set, it is `<hostname>:<cwd name>`. The installers do not write a `caller`.

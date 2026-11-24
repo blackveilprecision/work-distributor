@@ -3,6 +3,8 @@ import type { AgentThreads, EventsBatch, Heartbeat, HostState, HostView, Report,
 import { parseRepo, type Config } from "./config";
 import { threadView } from "./db";
 import { threadSteps } from "./steps";
+import { TOOLS, toolRoute } from "./tools";
+import { VERSION } from "../shared/version";
 import type { Reports } from "./reports";
 import { HttpError, type Scheduler } from "./scheduler";
 
@@ -58,9 +60,18 @@ export function makeHandler(s: Scheduler, reports: Reports) {
     throw new HttpError(404, "not found");
   }
 
-  async function callerRoute(method: string, path: string, url: URL, body: any) {
+  async function callerRoute(method: string, path: string, url: URL, body: any): Promise<Response> {
     const caller = url.searchParams.get("caller");
     let m: RegExpMatchArray | null;
+    if (method === "GET" && path === "/mcp/tools") return json({ version: VERSION, tools: TOOLS });
+    if (method === "POST" && path === "/mcp/call") {
+      if (typeof body?.caller !== "string" || !body.caller) throw new HttpError(400, "caller is required");
+      const r = toolRoute(String(body.name), body.arguments ?? {}, body.caller), u = new URL(r.path, url);
+      const res = await callerRoute(r.method, u.pathname, u, r.body ?? {});
+      if (!res.ok) return res;
+      const v = await res.json();
+      return json(r.shape ? r.shape(v) : v);
+    }
     if (method === "POST" && path === "/threads") return json(s.submit(body as SubmitRequest), 201);
     if (method === "GET" && path === "/threads") return json(s.views(caller));
     if ((m = path.match(/^\/threads\/([\w-]+)(?:\/(send|cancel|release|steps))?$/))) {

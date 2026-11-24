@@ -21,13 +21,25 @@ export function loadCfg(env: Record<string, string | undefined> = process.env): 
   };
 }
 
-export async function call(cfg: Cfg, method: string, path: string, body?: unknown, timeoutMs = 15000): Promise<any> {
-  const res = await fetch(cfg.url + path, {
-    method,
-    headers: { authorization: `Bearer ${cfg.token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
+// A refused connection never reached the coordinator, so even a POST is safe to repeat: this rides out a coordinator restart.
+export async function call(cfg: Cfg, method: string, path: string, body?: unknown, timeoutMs = 15000, retryMs = 20000): Promise<any> {
+  const until = Date.now() + retryMs;
+  let res: Response;
+  for (;;) {
+    try {
+      res = await fetch(cfg.url + path, {
+        method,
+        headers: { authorization: `Bearer ${cfg.token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      break;
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      if ((code !== "ConnectionRefused" && code !== "ECONNREFUSED") || Date.now() >= until) throw e;
+      await Bun.sleep(500);
+    }
+  }
   const text = await res.text();
   if (!res.ok) throw new Error(`${method} ${path}: ${res.status} ${text.slice(0, 300)}`);
   return text ? JSON.parse(text) : null;
@@ -36,7 +48,7 @@ export async function call(cfg: Cfg, method: string, path: string, body?: unknow
 export const qs = (o: Record<string, string | number | undefined>) =>
   "?" + Object.entries(o).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join("&");
 
-export const ack = (cfg: Cfg, id: number, timeoutMs?: number) => call(cfg, "POST", `/reports/${id}/ack`, undefined, timeoutMs);
+export const ack = (cfg: Cfg, id: number, timeoutMs?: number, retryMs?: number) => call(cfg, "POST", `/reports/${id}/ack`, undefined, timeoutMs, retryMs);
 
 // One compact text block per report, used as channel content and as hook context.
 export function reportText(r: Report): string {

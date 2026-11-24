@@ -143,3 +143,15 @@ test("an unknown or mistyped option is refused with the command's help, not sile
   expect(await cliMain(["ls", "--all", "--caller=x"])).toBe(0);
   expect(await cliMain(["reports", "--pending", "--hook", "--bogus"])).toBe(0);   // the hook never fails
 });
+
+test("client calls wait out a coordinator that is restarting, but not forever", async () => {
+  const { call } = await import("../../src/cli/client.ts");
+  const port = 20000 + Math.floor(Math.random() * 20000);
+  const cfg = { url: `http://127.0.0.1:${port}`, token: "t", caller: "c" };
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  setTimeout(() => { server = Bun.serve({ port, fetch: () => Response.json({ up: true }) }); }, 700);
+  try {
+    expect(await call(cfg, "POST", "/threads", {})).toEqual({ up: true });
+  } finally { server?.stop(true); }
+  await expect(call(cfg, "GET", "/hosts", undefined, 1000, 0)).rejects.toThrow();
+});

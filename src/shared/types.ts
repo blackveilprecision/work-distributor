@@ -101,7 +101,7 @@ export interface UnitStatus { thread: string; epoch: number; turn: number; runni
 // labels and maxThreads come from the agent's own config (agent.json); the coordinator falls back to coord.json if absent.
 export interface Heartbeat { host: string; agentVersion: string; probe: Probe; units: UnitStatus[]; labels?: string[]; maxThreads?: number }
 // Coordinator answers a heartbeat with units to stop (stale epochs, cancelled threads).
-export interface HeartbeatReply { stop: StopTurn[] }
+export interface HeartbeatReply { stop: StopTurn[]; version?: string }   // version: the coordinator's; an older agent updates itself to it
 
 export interface EventsBatch {
   host: string; thread: string; epoch: number; turn: number;

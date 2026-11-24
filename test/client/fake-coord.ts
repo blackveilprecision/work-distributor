@@ -1,5 +1,6 @@
 // In-process stand-in for the coordinator's caller API.
 import type { Report } from "../../src/shared/types.ts";
+import { TOOLS, toolRoute } from "../../src/coord/tools.ts";
 
 export const rep = (id: number, over: Partial<Report> = {}): Report => ({
   id, caller: "t:x", thread: `th${id}`, tag: "job", kind: "final", state: "done", host: "box1", isError: false,
@@ -14,6 +15,7 @@ export function fakeCoord(token = "tok") {
   const streams: ReadableStreamDefaultController[] = [];
   let streamHits = 0;
   let dropFirstStream = false;
+  const tools = { list: TOOLS as unknown[] };
   const enc = new TextEncoder();
   const sse = (c: ReadableStreamDefaultController, r: Report) => c.enqueue(enc.encode(`data: ${JSON.stringify(r)}\n\n`));
 
@@ -37,6 +39,14 @@ export function fakeCoord(token = "tok") {
         });
         return new Response(stream, { headers: { "content-type": "text/event-stream" } });
       }
+      if (u.pathname === "/mcp/tools") return Response.json({ version: "0", tools: tools.list });
+      if (u.pathname === "/mcp/call") {   // the real coordinator's routing, run against this fake's routes
+        const r = toolRoute(body.name, body.arguments, body.caller);
+        const res = await fetch(new URL(r.path, u), { method: r.method, headers: { authorization: `Bearer ${token}` }, body: r.body ? JSON.stringify(r.body) : undefined });
+        if (!res.ok) return res;
+        const v = await res.json();
+        return Response.json(r.shape ? r.shape(v) : v);
+      }
       const ackM = u.pathname.match(/^\/reports\/(\d+)\/ack$/);
       if (ackM) { acked.push(Number(ackM[1])); return Response.json({ ok: true }); }
       if (u.pathname === "/reports") return Response.json(pending.filter((r) => !acked.includes(r.id)));
@@ -50,7 +60,7 @@ export function fakeCoord(token = "tok") {
     },
   });
   return {
-    url: `http://127.0.0.1:${server.port}`, token, reqs, acked, pending,
+    url: `http://127.0.0.1:${server.port}`, token, reqs, acked, pending, tools,
     dropFirstStream() { dropFirstStream = true; },
     push(r: Report) { pending.push(r); for (const c of streams) sse(c, r); },
     stop() { server.stop(true); },

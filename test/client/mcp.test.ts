@@ -11,7 +11,7 @@ async function setup(opts: { drop?: boolean } = {}) {
   const coord = fakeCoord();
   if (opts.drop) coord.dropFirstStream();
   const cfg = { url: coord.url, token: coord.token, caller: "t:x" };
-  const server = createServer(cfg);
+  const { server, refresh } = createServer(cfg);
   const client = new Client({ name: "test", version: "0" });
   const events: any[] = [];
   client.fallbackNotificationHandler = async (n) => { events.push(n); };
@@ -19,7 +19,7 @@ async function setup(opts: { drop?: boolean } = {}) {
   await Promise.all([server.connect(a), client.connect(b)]);
   const ctl = new AbortController();
   stops.push(() => { ctl.abort(); coord.stop(); });
-  return { coord, cfg, server, client, events, ctl };
+  return { coord, cfg, server, refresh, client, events, ctl };
 }
 
 test("declares the channel capability and the eight tools", async () => {
@@ -34,6 +34,7 @@ test("tools call the coordinator and return at once", async () => {
   const { client, coord } = await setup();
   const r: any = await client.callTool({ name: "wd_submit", arguments: { repo: "o/r", prompt: "do it", tag: "a" } });
   expect(JSON.parse(r.content[0].text)).toEqual({ id: "th1", position: 0 });
+  expect(coord.reqs.at(-2)).toMatchObject({ method: "POST", path: "/mcp/call", body: { name: "wd_submit", caller: "t:x" } });
   const post = coord.reqs.find((q) => q.method === "POST" && q.path === "/threads")!;
   expect(post.body).toMatchObject({ caller: "t:x", repo: "o/r", prompt: "do it", tag: "a" });
   expect(post.auth).toBe("Bearer tok");
@@ -97,4 +98,17 @@ test("stream: reconnects with backoff after the connection drops, without duplic
   coord.push(rep(8));
   await until(() => events.length === 2);
   expect(events.map((e) => e.params.meta.thread)).toEqual(["th7", "th8"]);
+});
+
+test("tools come from the coordinator; a changed list on reconnect sends tools/list_changed", async () => {
+  const { coord, cfg, server, refresh, client, events, ctl } = await setup();
+  expect((await client.listTools()).tools.length).toBe(8);
+  void streamReports(cfg, server, ctl.signal, 20, 100, refresh);   // what wd mcp wires up
+  await until(() => coord.reqs.some((q) => q.path.startsWith("/reports/stream")));
+  await Bun.sleep(50);
+  expect(events.filter((e) => e.method === "notifications/tools/list_changed")).toEqual([]);   // unchanged: no notice
+  coord.tools.list = [...coord.tools.list, { name: "wd_new", description: "x", inputSchema: { type: "object", properties: {} } }];
+  await refresh();
+  expect(events.filter((e) => e.method === "notifications/tools/list_changed")).toHaveLength(1);
+  expect((await client.listTools()).tools.map((t) => t.name)).toContain("wd_new");
 });

@@ -42,6 +42,7 @@ Before a change is done, run `bun test`, `bunx tsc --noEmit` and `bun run build`
 CI (`.github/workflows/ci.yml`) runs tsc, the build and the coordinator and client tests on Linux; the full suite is yours to run on macOS.
 
 ## Deploying a change
+A released version: `wd coord install <host>` is enough. Agents on an older release update themselves to the coordinator's version (`src/agent/update.ts`), and the `wd_*` tools are served by the coordinator (`src/coord/tools.ts`), so open sessions pick them up. An unreleased build is deployed by hand:
 1. Build the binaries.
 2. Copy them to `~/.local/bin/wd` on each host.
 3. Restart:

@@ -6,7 +6,7 @@ import { homedir, hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { AGENT_PORT, COORD_PORT, type HostView } from "../shared/types.ts";
 import { call, clientConfigPath, loadCfg, type Cfg } from "./client.ts";
-import { VERSION } from "../shared/version.ts";
+import { releaseUrl, VERSION } from "../shared/version.ts";
 
 export type Role = "agent" | "coord";
 
@@ -72,8 +72,7 @@ function srcRoot(): string | null {
 const build = (bunTarget: string, out: string) => run(["bun", "build", "--compile", `--target=${bunTarget}`, join(srcRoot()!, "src/main.ts"), "--outfile", out]).then(() => {});
 
 // The release binary of a version for a platform. WD_RELEASES points a fork at its own releases.
-export const releaseUrl = (version: string, os: string, arch: string, base = process.env.WD_RELEASES || "https://github.com/blackveilprecision/work-distributor/releases/download") =>
-  `${base}/v${version}/wd-${os}-${arch}`;
+export { releaseUrl };
 
 export const sshTarget = (host: string): Target => ({
   name: host, local: false, build,
