@@ -53,7 +53,7 @@ test("init-local, foreground coord + agent, repo add on a file:// url, submit, r
   writeFileSync(claude, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(ROOT, "test/fake-claude.ts"))} "$@"\n`);
   chmodSync(claude, 0o755);
   const edit = (f: string, patch: object) => writeFileSync(join(dir, f), JSON.stringify({ ...JSON.parse(readFileSync(join(dir, f), "utf8")), ...patch }));
-  edit("coord.json", { tickMs: 300, floors: { diskFreePct: 0, memReserveMb: 0 } });
+  edit("coord.json", { tickMs: 300, floors: { diskFreePct: 0, memReserveMb: 0, cpuOversub: 1000 } });
   edit("agent.json", { claude, heartbeatSec: 1, tailMs: 100 });
 
   const env = { ...process.env, HOME: join(root, "home") };
