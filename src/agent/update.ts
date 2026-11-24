@@ -5,7 +5,7 @@ import { chmodSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { newer, releaseUrl, VERSION } from "../shared/version";
 
-const RETRY_MS = 60 * 60 * 1000;
+const RETRY_MS = 10 * 60 * 1000;
 const tried = new Map<string, number>();
 
 // Only a compiled wd replaces itself; an agent run from source has bun as its executable.
@@ -21,7 +21,8 @@ export function wantUpdate(target: string | undefined, autoUpdate: boolean | und
 // Downloads, checks the new binary reports the version, then renames it over `exe` (a new inode, so the running
 // image is untouched). Throws without touching `exe` on any failure.
 export async function replaceBinary(target: string, exe: string, os: string = process.platform, arch: string = process.arch, base?: string) {
-  const res = await fetch(releaseUrl(target, os, arch, base), { signal: AbortSignal.timeout(120_000) });
+  // About 95 MB, possibly onto a busy host: a generous limit.
+  const res = await fetch(releaseUrl(target, os, arch, base), { signal: AbortSignal.timeout(600_000) });
   if (!res.ok) throw new Error(`download ${res.status}`);
   const tmp = `${exe}.new`;
   try {

@@ -109,7 +109,7 @@ async function beat(ctx: Ctx) {
       await replaceBinary(reply!.version!, process.execPath);
       console.error(`wd agent: updated ${VERSION} -> ${reply!.version}; exiting for the service manager to restart it`);
       process.exit(0);
-    } catch (e) { console.error(`wd agent: update to ${reply!.version} failed (retrying in an hour):`, (e as Error).message); }
+    } catch (e) { console.error(`wd agent: update to ${reply!.version} failed (retrying in 10 minutes):`, (e as Error).message); }
   }
 }
 
