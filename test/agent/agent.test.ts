@@ -325,7 +325,8 @@ describe("heartbeat", () => {
     const a = [...h.agent.ctx.active.values()][0];
     h.coord.stopReply = [{ thread: "t1", epoch: 1 }];
     await until(() => h.agent.ctx.active.size === 0, 15_000, "turn dropped");
-    expect(() => process.kill(-a.meta.pid!, 0)).toThrow();
+    // Marked stale first (so its exit is not taken for an ending), then killed: the kill can land just after the drop.
+    await until(() => { try { process.kill(-a.meta.pid!, 0); return false; } catch { return true; } }, 5_000, "group gone");
     expect(h.coord.of("/agent/turn-end").length).toBe(0);
   });
 });
