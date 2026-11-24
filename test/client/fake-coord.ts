@@ -19,9 +19,7 @@ export function fakeCoord(token = "tok") {
   const enc = new TextEncoder();
   const sse = (c: ReadableStreamDefaultController, r: Report) => c.enqueue(enc.encode(`data: ${JSON.stringify(r)}\n\n`));
 
-  const server = Bun.serve({
-    port: 0,
-    async fetch(req) {
+  async function fetch(req: Request): Promise<Response> {
       const u = new URL(req.url);
       const body = req.method === "POST" || req.method === "PUT" ? await req.json().catch(() => undefined) : undefined;
       reqs.push({ method: req.method, path: u.pathname + u.search, body, auth: req.headers.get("authorization") });
@@ -42,7 +40,7 @@ export function fakeCoord(token = "tok") {
       if (u.pathname === "/mcp/tools") return Response.json({ version: "0", tools: tools.list });
       if (u.pathname === "/mcp/call") {   // the real coordinator's routing, run against this fake's routes
         const r = toolRoute(body.name, body.arguments, body.caller);
-        const res = await fetch(new URL(r.path, u), { method: r.method, headers: { authorization: `Bearer ${token}` }, body: r.body ? JSON.stringify(r.body) : undefined });
+        const res = await fetch(new Request(new URL(r.path, u), { method: r.method, headers: { authorization: `Bearer ${token}` }, body: r.body ? JSON.stringify(r.body) : undefined }));
         if (!res.ok) return res;
         const v = await res.json();
         return Response.json(r.shape ? r.shape(v) : v);
@@ -57,8 +55,8 @@ export function fakeCoord(token = "tok") {
       if (u.pathname === "/repos" && req.method === "GET") return Response.json([{ id: "acme/shop", url: "u", defaultRef: "main", doctor: "true", requires: ["gpu"], rust: true, source: "db" }]);
       if (u.pathname.startsWith("/repos/")) return Response.json({ ...body, source: u.pathname.endsWith("o%2Fcfg") ? "config" : "db" });
       return Response.json({ path: u.pathname, body });
-    },
-  });
+  }
+  const server = Bun.serve({ port: 0, fetch });
   return {
     url: `http://127.0.0.1:${server.port}`, token, reqs, acked, pending, tools,
     dropFirstStream() { dropFirstStream = true; },
