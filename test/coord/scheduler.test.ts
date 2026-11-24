@@ -77,6 +77,66 @@ describe("placement", () => {
     expect([state(h, t1), state(h, t2)]).toEqual(["running", "queued"]);
   });
 
+  test("no thread cap by default: memory and CPU decide", async () => {
+    const h = harness();
+    await ready(h, ["a"], { memAvailMb: 30000 });
+    const ids = Array.from({ length: 6 }, () => submit(h));
+    await h.sched.tick();
+    expect(ids.map((id) => state(h, id))).toEqual(Array(6).fill("running"));
+  });
+
+  test("CPU: the load average and what running turns were promised count against cores times cpuOversub", async () => {
+    const h = harness();
+    await ready(h, ["a"], { memAvailMb: 100_000, load1: 11.6 });   // 8 cores x 1.5 = 12; a small thread wants 0.5
+    const t1 = submit(h);
+    await h.sched.tick();
+    expect(state(h, t1)).toBe("queued");
+    expect(h.sched.eligibility("o/app", "a")).toBe("cpu 11.6 of 8 cores busy or promised, needs 0.5");
+    h.sched.onHeartbeat(hb("a", { memAvailMb: 100_000, load1: 0 }));
+    const heavy = Array.from({ length: 6 }, () => submit(h, { size: "heavy" }));   // 2 cores each, promised until they use it
+    await h.sched.tick();
+    expect([t1, ...heavy].map((id) => state(h, id))).toEqual([...Array(6).fill("running"), "queued"]);   // 0.5 + 5 x 2 = 10.5, a sixth makes 12.5
+    expect(h.sched.promisedCores("a")).toBe(10.5);
+  });
+
+  test("placement prefers the host it would run fastest on, then the one with more memory to spare", async () => {
+    const h = harness();
+    await ready(h, ["a"], { memAvailMb: 30000, cpuScore: 200 });
+    await ready(h, ["b"], { memAvailMb: 9000, cpuScore: 300 });
+    const t1 = submit(h);
+    await h.sched.tick();
+    expect(h.db.thread(t1)!.host).toBe("b");   // faster, though a has more memory
+    h.sched.onHeartbeat(hb("b", { memAvailMb: 9000, cpuScore: 300, load1: 7.9 }));   // b's cores are taken: it would get a sliver
+    const t2 = submit(h);
+    await h.sched.tick();
+    expect(h.db.thread(t2)!.host).toBe("a");
+    h.sched.onHeartbeat(hb("b", { memAvailMb: 40000, cpuScore: 205 }));   // within 5% of a: more memory wins
+    const t3 = submit(h);
+    await h.sched.tick();
+    expect(h.db.thread(t3)!.host).toBe("b");
+  });
+
+  test("CPU estimate: the p90 of each turn's highest one-minute rate, never below the size hint", async () => {
+    const h = harness();
+    await ready(h, ["a"], { memAvailMb: 30000 });
+    const t1 = submit(h);
+    await h.sched.tick();
+    const unit = (cpuMs: number) => [{ thread: t1, epoch: 1, turn: 1, running: true, cpuMs, memPeakMb: 500 }];
+    h.advance(61_000); h.sched.onHeartbeat(hb("a", { memAvailMb: 30000, units: unit(61_000) }));    // 1 core over the first minute
+    h.advance(61_000); h.sched.onHeartbeat(hb("a", { memAvailMb: 30000, units: unit(244_000) }));   // 3 cores over the second
+    expect(h.db.turn(t1, 1)).toMatchObject({ cpu_rate: 3, cpu_peak: 3, est_cpu: 0.5 });
+    expect(h.sched.promisedCores("a")).toBe(0);   // using more than promised
+    h.sched.onTurnEnd(turnEnd("a", t1, 1, 1));
+    expect(h.sched.estimate({ repo: "o/app", size: null })).toEqual({ mb: 2048, cores: 3 });
+    expect(h.sched.estimate({ repo: "o/rs", size: "heavy" })).toEqual({ mb: 8192, cores: 2 });
+    // A turn shorter than a quarter window counts its average.
+    const t2 = submit(h, { repo: "o/rs" });
+    await h.sched.tick();
+    h.advance(10_000); h.sched.onHeartbeat(hb("a", { memAvailMb: 30000, units: [{ thread: t2, epoch: 1, turn: 1, running: true, cpuMs: 15_000, memPeakMb: 500 }] }));
+    h.sched.onTurnEnd(turnEnd("a", t2, 1, 1));
+    expect(h.db.turn(t2, 1)!.cpu_peak).toBe(1.5);
+  });
+
   test("reservations: a running turn holds the part of its estimate it has not used yet, however long it has run", async () => {
     const h = harness();
     await ready(h, ["a"], { memAvailMb: 5000 });   // fits one small (2048+2048) but not two

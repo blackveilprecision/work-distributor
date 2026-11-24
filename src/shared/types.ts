@@ -46,7 +46,10 @@ export interface Report {
 export interface HostView {
   name: string; os: "linux" | "darwin"; state: HostState; reason: string | null; labels: string[];
   cores: number; memTotalMb: number; memAvailMb: number; diskFreePct: number;
-  running: number; maxThreads: number; claudeVersion: string | null; loginExpiresAt: number | null; lastSeenAt: number | null;
+  load1: number;               // 1-minute load average: every process on the host, wd's or not
+  cpuScore: number | null;     // single-core benchmark (agent/probe.ts bench): relative host speed
+  cpuPromisedCores: number;    // CPU promised to running turns and not in use yet
+  running: number; maxThreads: number | null;   // null: no cap, memory and CPU decide claudeVersion: string | null; loginExpiresAt: number | null; lastSeenAt: number | null;
   doctorFailed: string[];      // repos whose doctor fails here: none of their threads go to this host
   why?: string | null;         // GET /hosts?repo=: why a thread of that repo cannot start here now; null when it can
 }
@@ -56,7 +59,7 @@ export interface HostView {
 export interface QueueEntry { id: string; caller: string; repo: string; tag: string | null; host: string | null; since: number; waiting: string | null }
 export interface QueueView {
   holdUntil: number | null;                                    // usage-limit hold on all new starts
-  queued: (QueueEntry & { priority: boolean; estimateMb: number; prompt: string })[];   // in placement order; prompt cut at 500 chars
+  queued: (QueueEntry & { priority: boolean; estimateMb: number; estimateCores: number; prompt: string })[];   // in placement order; prompt cut at 500 chars
   followUps: (QueueEntry & { count: number; texts: string[] })[];   // sends waiting to start a turn on their thread's host, each cut at 500
   // Finished a turn, worktree kept for a follow-up or a release; not using a slot. lastMessage cut at 600 chars.
   idle: { id: string; caller: string; repo: string; tag: string | null; host: string | null; since: number; turns: number; lastMessage: string | null }[];
@@ -93,6 +96,7 @@ export interface DoctorResult { ok: boolean; output: string }   // output tail, 
 export interface Probe {
   os: "linux" | "darwin"; cores: number; memTotalMb: number; memAvailMb: number;
   diskFreePct: number; diskFreeGb: number;
+  load1?: number; cpuScore?: number;   // absent from agents before 0.4
   claudeVersion: string | null; loginOk: boolean; loginError: string | null; loginExpiresAt: number | null;
   problems: string[];          // anything that should refuse the host, human readable
 }

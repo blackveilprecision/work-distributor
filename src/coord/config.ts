@@ -6,7 +6,7 @@ export interface RepoCfg { url: string; defaultRef: string; doctor?: string; req
 export interface Config {
   listen: string; db: string; callerToken: string;
   hosts: Record<string, HostCfg>; repos: Record<string, RepoCfg>;
-  floors: { diskFreePct: number; memReserveMb: number };
+  floors: { diskFreePct: number; memReserveMb: number; cpuOversub: number };   // cpuOversub: how far past its cores a host may be committed
   tickMs: number; stallMin: number; lostAfterSec: number;
   asleepLostSec: number; runtimeMaxSec: number;
 }
@@ -25,7 +25,7 @@ export function parseConfig(raw: any): Config {
     callerToken: raw.callerToken,
     hosts: raw.hosts ?? {},
     repos,
-    floors: { diskFreePct: 15, memReserveMb: 2048, ...raw.floors },
+    floors: { diskFreePct: 15, memReserveMb: 2048, cpuOversub: 1.5, ...raw.floors },
     tickMs: raw.tickMs ?? 5000,
     stallMin: raw.stallMin ?? 20,
     lostAfterSec: raw.lostAfterSec ?? 120,

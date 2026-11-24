@@ -18,11 +18,12 @@ export function hostViews(s: Scheduler, repo?: string): HostView[] {
     const doctorFailed = s.db.all<{ repo: string }>("SELECT repo FROM doctor WHERE host=? AND ok=0 ORDER BY repo", name).map((d) => d.repo).filter((r) => s.repo(r));
     if (!row) {
       return { name, os: "linux", state: "lost" as HostState, reason: "never seen", labels: c.labels ?? [], cores: 0, memTotalMb: 0, memAvailMb: 0,
-        diskFreePct: 0, running: 0, maxThreads: c.maxThreads ?? 4, claudeVersion: null, loginExpiresAt: null, lastSeenAt: null, doctorFailed, ...why };
+        diskFreePct: 0, load1: 0, cpuScore: null, cpuPromisedCores: 0, running: 0, maxThreads: c.maxThreads ?? null, claudeVersion: null, loginExpiresAt: null, lastSeenAt: null, doctorFailed, ...why };
     }
     const hb = JSON.parse(row.hb) as Heartbeat, p = hb.probe;
     return { name, os: p.os, state: row.state as HostState, reason: row.reason, labels: hb.labels ?? c.labels ?? [], cores: p.cores,
-      memTotalMb: p.memTotalMb, memAvailMb: p.memAvailMb, diskFreePct: p.diskFreePct, running: s.db.runningOn(name), maxThreads: s.maxThreads(row),
+      memTotalMb: p.memTotalMb, memAvailMb: p.memAvailMb, diskFreePct: p.diskFreePct, load1: p.load1 ?? 0, cpuScore: p.cpuScore ?? null,
+      cpuPromisedCores: Math.round(s.promisedCores(name) * 100) / 100, running: s.db.runningOn(name), maxThreads: s.maxThreads(row),
       claudeVersion: p.claudeVersion, loginExpiresAt: p.loginExpiresAt, lastSeenAt: row.seen, doctorFailed, ...why };
   });
 }

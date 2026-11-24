@@ -179,7 +179,8 @@ describe("workspace pieces", () => {
     const c = loadConfig(f);
     expect(c.dataDir).toBe(join(process.env.HOME!, ".wd-test"));
     expect(c.claude).toBe(join(process.env.HOME!, ".local/bin/claude"));
-    expect(c).toMatchObject({ heartbeatSec: 15, maxThreads: 4, labels: [] });
+    expect(c).toMatchObject({ heartbeatSec: 15, labels: [] });
+    expect(c.maxThreads).toBeUndefined();   // no cap unless set
     writeFileSync(f, JSON.stringify({ name: "n" }));
     expect(() => loadConfig(f)).toThrow("coordUrl");
   });
@@ -213,4 +214,9 @@ describe("darwin process group (ps based)", () => {
     }
     expect(alive(p.pid)).toBe(false);
   });
+});
+
+test("the speed benchmark gives a positive score", async () => {
+  const { bench } = await import("../../src/agent/probe");
+  expect(bench(20)).toBeGreaterThan(0);
 });

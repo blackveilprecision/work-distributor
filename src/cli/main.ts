@@ -53,7 +53,7 @@ export function queueText(q: QueueView): string {
   for (const t of q.idle ?? []) out.push(`  ${[t.id, t.host ?? "-", t.tag ?? "-", `${t.turns} turn${t.turns === 1 ? "" : "s"}`, ago(t.since)].join("  ")}`);
   out.push("hosts");
   for (const h of q.hosts) {
-    out.push(`  ${[h.name, h.state, `${h.running}/${h.maxThreads}`, `mem=${h.memAvailMb}/${h.memTotalMb}MB`, `disk=${h.diskFreePct}%`, h.reason ?? ""].join("  ").trimEnd()}`);
+    out.push(`  ${[h.name, h.state, runs(h), cpu(h), `mem=${h.memAvailMb}/${h.memTotalMb}MB`, `disk=${h.diskFreePct}%`, h.reason ?? ""].join("  ").trimEnd()}`);
     for (const t of h.threads) {
       out.push(`    ${[t.id, t.repo, t.tag ?? "-", t.caller, `turn ${t.turn}`, ago(t.startedAt)].join("  ")}`);
       if (t.activity) out.push(`      ${t.activity.at ? `${ago(t.activity.at)} ago` : "earlier"}: ${t.activity.text}`);
@@ -61,6 +61,10 @@ export function queueText(q: QueueView): string {
   }
   return out.join("\n");
 }
+
+const runs = (h: HostView) => `${h.running}${h.maxThreads === null ? "" : `/${h.maxThreads}`}`;
+// Load average plus CPU promised to running turns, of the host's cores; speed is the agent's single-core benchmark.
+const cpu = (h: HostView) => `cpu=${(h.load1 + h.cpuPromisedCores).toFixed(1)}/${h.cores}${h.cpuScore ? ` speed=${h.cpuScore}` : ""}`;
 
 // The hook must never block the user's prompt: any failure prints nothing and exits 0.
 async function hook(cfg: Cfg, event: string, after?: string): Promise<void> {
@@ -194,7 +198,7 @@ const hosts = defineCommand({
   args: { repo: { type: "string", valueHint: "owner/name", description: "Also say per host why a new thread of this repo would not start there now, or eligible" }, ...caller },
   async run({ args }) {
     for (const h of (await call(cfgOf(args), "GET", `/hosts${args.repo ? qs({ repo: args.repo }) : ""}`)) as HostView[])
-      console.log([h.name, h.state, `run=${h.running}/${h.maxThreads}`, `mem=${h.memAvailMb}/${h.memTotalMb}MB`, `disk=${h.diskFreePct}%`,
+      console.log([h.name, h.state, `run=${runs(h)}`, cpu(h), `mem=${h.memAvailMb}/${h.memTotalMb}MB`, `disk=${h.diskFreePct}%`,
         ...(args.repo ? [h.why ? `${args.repo}: ${h.why}` : `${args.repo}: eligible`] : []),
         h.reason ?? "", h.doctorFailed?.length ? `doctor fails: ${h.doctorFailed.join(",")}` : ""].filter(Boolean).join("\t"));
   },

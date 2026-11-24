@@ -50,7 +50,7 @@ describe("GET /queue", () => {
     expect(q.queued[0]).toMatchObject({ id, waiting: expect.stringMatching(/^usage-limit hold until /) });
   });
 
-  test("follow-ups wait for the running turn, then for a slot on their host", async () => {
+  test("follow-ups wait for the running turn, then for room on their host", async () => {
     const h = harness();
     await ready(h, ["a"], { maxThreads: 1 });
     const t1 = submit(h);
@@ -60,7 +60,14 @@ describe("GET /queue", () => {
     h.sched.onTurnEnd(turnEnd("a", t1, 1, 1));
     expect(queue(h).followUps[0].waiting).toBeNull();
     h.sched.onHeartbeat(hb("a", { maxThreads: 0 }));
-    expect(queue(h).followUps[0].waiting).toBe("host full 0/0");
+    expect(queue(h).followUps[0].waiting).toBe("host a: full 0/0");
+    h.sched.onHeartbeat(hb("a", { memAvailMb: 3000 }));
+    expect(queue(h).followUps[0].waiting).toBe("host a: memory 3000 MB free, needs 2048+2048");
+    await h.sched.tick();
+    expect(h.db.thread(t1)!.state).toBe("idle");   // it does not start without room
+    h.sched.onHeartbeat(hb("a"));
+    await h.sched.tick();
+    expect(h.db.thread(t1)!.state).toBe("running");
   });
 
   test("served over HTTP with the caller token, and printed by wd queue", async () => {
@@ -76,7 +83,7 @@ describe("GET /queue", () => {
     const text = queueText(body);
     expect(text).toContain(`queued (1)\n  ${q2}  o/app  -  orch:x`);
     expect(text).toContain("a: full 1/1");
-    expect(text).toMatch(new RegExp(`  a  ok  1/1  mem=16000/32768MB  disk=50%\\n    ${id}  o/app  T  orch:x  turn 1  `));
+    expect(text).toMatch(new RegExp(`  a  ok  1/1  cpu=0\\.5/8  mem=16000/32768MB  disk=50%\\n    ${id}  o/app  T  orch:x  turn 1  `));
   });
 
   test("what a click opens: each host's eligibility per repo, a follow-up's waiting text, a queued prompt, and idle threads", async () => {

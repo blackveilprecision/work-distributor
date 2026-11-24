@@ -53,10 +53,10 @@ export function harness(over: Record<string, unknown> = {}) {
 export type H = ReturnType<typeof harness>;
 
 export function hb(host: string, o: { os?: "linux" | "darwin"; memAvailMb?: number; diskFreePct?: number; labels?: string[]; maxThreads?: number;
-  problems?: string[]; loginOk?: boolean; units?: Heartbeat["units"] } = {}): Heartbeat {
+  problems?: string[]; loginOk?: boolean; units?: Heartbeat["units"]; cores?: number; load1?: number; cpuScore?: number } = {}): Heartbeat {
   return {
     host, agentVersion: "t", labels: o.labels, maxThreads: o.maxThreads, units: o.units ?? [],
-    probe: { os: o.os ?? "linux", cores: 8, memTotalMb: 32768, memAvailMb: o.memAvailMb ?? 16000, diskFreePct: o.diskFreePct ?? 50, diskFreeGb: 100,
+    probe: { os: o.os ?? "linux", cores: o.cores ?? 8, load1: o.load1 ?? 0, cpuScore: o.cpuScore, memTotalMb: 32768, memAvailMb: o.memAvailMb ?? 16000, diskFreePct: o.diskFreePct ?? 50, diskFreeGb: 100,
       claudeVersion: "2.0", loginOk: o.loginOk ?? true, loginError: null, loginExpiresAt: null, problems: o.problems ?? [] },
   };
 }

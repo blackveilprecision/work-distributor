@@ -119,24 +119,26 @@ export default class WdQueue extends View {
   }
 
   host(t, h) {
-    const key = `h:${h.name}`, open = this.open.has(key), full = h.running >= h.maxThreads, ok = h.state === "ok";
+    const key = `h:${h.name}`, open = this.open.has(key), full = h.maxThreads != null && h.running >= h.maxThreads, ok = h.state === "ok";
+    const busy = (h.load1 ?? 0) + (h.cpuPromisedCores ?? 0);   // cores in use or promised to running turns
     const dot = !ok ? (h.state === "asleep" ? t.idle : t.blocked) : h.running ? t.working : t.dim;
     const repos = Object.entries(h.repos ?? {});
     return v_flex().id(`h-${h.name}`).rounded(6).when(open, (el) => el.bg(t.raised).pb(4))
       .child(h_flex().id(`hh-${h.name}`).h(28).px(8).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover))
         .on_click((_e, cx) => this.toggle(key, cx))
-        .tooltip(ok ? `RAM ${gb(h.memAvailMb)} free of ${gb(h.memTotalMb)} · disk ${h.diskFreePct}% free · click for details` : h.reason ?? h.state)
+        .tooltip(ok ? `CPU ${busy.toFixed(1)} of ${h.cores} cores busy or promised · RAM ${gb(h.memAvailMb)} free of ${gb(h.memTotalMb)} · disk ${h.diskFreePct}% free · click for details` : h.reason ?? h.state)
         .child(div().size(7).flex_none().rounded(4).bg(dot))
         .child(div().text_color(t.foreground).when(open, (el) => el.font_medium()).child(h.name))
-        .child(div().text_size(11).text_color(full ? t.blocked : t.muted).child(`${h.running}/${h.maxThreads}`))
+        .child(div().text_size(11).text_color(full ? t.blocked : t.muted).child(h.maxThreads == null ? `${h.running}` : `${h.running}/${h.maxThreads}`))
         .child(div().flex_1())
         .when(ok, (el) => el
+          .child(div().flex_none().text_size(11).text_color(busy > h.cores ? t.blocked : t.dim).child(`${busy.toFixed(1)}/${h.cores}c`))
           .child(div().flex_none().text_size(11).text_color(t.dim).child(`${gb(h.memAvailMb)}/${gbWhole(h.memTotalMb)}`))
           .child(div().flex_none().text_size(11).text_color(h.diskFreePct < 20 ? t.blocked : t.dim).child(`${Math.round(h.diskFreePct)}%`)))
         .when(!ok, (el) => el.child(div().flex_none().text_size(11).text_color(t.blocked).child(h.state))))
       .when(open, (el) => el
         .child(div().id(`hd-${h.name}`).pl(23).pr(8).pb(2).text_size(11).text_color(t.dim).truncate()
-          .child([h.labels.join(", ") || "no labels", h.claudeVersion ? `claude ${h.claudeVersion.split(" ")[0]}` : null, h.lastSeenAt ? `seen ${ago(h.lastSeenAt)} ago` : "never seen"].filter(Boolean).join(" · ")))
+          .child([h.labels.join(", ") || "no labels", h.cpuScore ? `speed ${h.cpuScore}` : null, h.claudeVersion ? `claude ${h.claudeVersion.split(" ")[0]}` : null, h.lastSeenAt ? `seen ${ago(h.lastSeenAt)} ago` : "never seen"].filter(Boolean).join(" · ")))
         .when(!ok && Boolean(h.reason), (el) => el.child(this.para(t, `hr-${h.name}`, h.reason, t.blocked)))
         .children(repos.map(([r, why]) => h_flex().id(`he-${h.name}-${r}`).pl(23).pr(8).gap(6).text_size(11).tooltip(why ?? "a new thread of this repo could start here now")
           .child(div().flex_none().text_color(t.muted).child(repoName(r)))

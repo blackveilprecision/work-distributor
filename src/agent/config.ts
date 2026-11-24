@@ -4,7 +4,7 @@ import { basename, join } from "node:path";
 
 export interface AgentConfig {
   name: string; listen: string; coordUrl: string; token: string; dataDir: string; claude: string;
-  labels: string[]; gitTokenFile?: string; maxThreads: number; targetDirPool: number;
+  labels: string[]; gitTokenFile?: string; maxThreads?: number; targetDirPool: number;   // maxThreads: an optional cap; memory and CPU decide without it
   autoUpdate?: boolean;   // false: keep this binary even when the coordinator runs a newer release
   path?: string;   // PATH for doctors and turns; without it, the host's interactive login shell's PATH (see loginPath)
   heartbeatSec: number; tailMs: number; pushEverySec: number;   // tuning knobs, tests shorten them
@@ -17,7 +17,7 @@ export function loadConfig(path?: string): AgentConfig {
   if (!existsSync(file)) throw new Error(`agent config not found: ${file}`);
   const c = { ...JSON.parse(readFileSync(file, "utf8")) };
   const cfg: AgentConfig = {
-    listen: "0.0.0.0:7781", dataDir: "~/.wd", claude: "claude", labels: [], maxThreads: 4, targetDirPool: 4,
+    listen: "0.0.0.0:7781", dataDir: "~/.wd", claude: "claude", labels: [], targetDirPool: 4,
     heartbeatSec: 15, tailMs: 1000, pushEverySec: 600, ...c,
   };
   for (const k of ["name", "coordUrl", "token"] as const) if (!cfg[k]) throw new Error(`agent config: "${k}" is required`);

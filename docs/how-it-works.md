@@ -33,15 +33,22 @@ The scheduler ticks every `tickMs` (default 5 s). It considers queued threads wi
 - its state is `ok`;
 - it has every label the thread `requires` (a host's own name counts as a label, so `requires: ["bazzite"]` pins a thread to bazzite);
 - the repo's `doctor` command passed on it. The coordinator asks the agent to run the doctor when the host first appears, again after 24 h, and after 10 min if it failed. The doctor runs with the same PATH as the turns (see Running a turn);
-- its running turns are fewer than its `maxThreads`;
+- if it sets `maxThreads` (an optional cap; there is none by default), its running turns are fewer;
 - its free disk is at least `floors.diskFreePct` (default 15%);
-- its available memory, minus reservations, covers the estimate plus `floors.memReserveMb` (default 2048).
+- its available memory, minus reservations, covers the memory estimate plus `floors.memReserveMb` (default 2048);
+- its CPU in use or promised (the 1-minute load average plus the CPU reservations), plus the CPU estimate, is at most its cores times `floors.cpuOversub` (default 1.5). The load average counts everything on the host: other turns, work a turn started outside its own process group or unit (`hc run`), and the owner's own use. CPU contention slows turns down rather than killing them, which is why a host may be committed past its cores.
 
-The thread goes to the qualifying host with the most memory left over. Two more rules apply:
-- **Estimate:** the p90 of peak memory over the repo's last 20 turns, but never less than the size hint: 2048 MB for `small` (the default) and 8192 MB for `heavy`. So light turns of a repo cannot shrink a heavy thread's estimate, or the memory cap that comes from it (twice the estimate). An out-of-memory kill raises it. The cap is per turn: it stops one runaway command before it takes the host's memory from the other threads, so a turn can be killed while the host still has plenty free. The failure reason names the cap, the estimate and the step that was running.
-- **Reservation:** every running turn on a host counts the part of its estimate it has not used yet (estimate minus its peak so far) against that host, however long it has run. The probe's free memory only shows what turns use now; a build that peaks later must not find its memory given to another thread.
+The thread goes to the qualifying host where it would run fastest: the host's single-core speed times the share of the cores it wants that are free there. Speed is a benchmark each agent runs once when it starts (sorting and a JSON round trip, best of three 200 ms runs, `cpuScore`). Among hosts within 5% of the best, the one with the most memory left over wins. More rules:
+- **Estimate:** two numbers per repo, each the p90 over its last 20 turns, but never less than the size hint:
+  - memory: each turn's peak; at least 2048 MB for `small` (the default) and 8192 MB for `heavy`;
+  - CPU: each turn's highest rate over a one-minute window, in cores, from the CPU time the agent reports every heartbeat (a turn's last partial window counts if it was at least 15 s, and a shorter turn counts its average); at least 0.5 cores for `small` and 2 for `heavy`. A minute, because a turn mostly waits on the model and then a build takes every core for a while: its average says little about what it needs.
 
-A thread that fits nowhere stays queued, and later threads can still be placed past it. `GET /queue` (`wd queue`) runs the same checks without placing anything and says, for each queued thread and each pending follow-up, why it has not started: the usage-limit hold, or each host's first failing check (`full 4/4`, `lacks label gpu`, `doctor failed: bun: not found`, `memory 3000 MB free, needs 2048+2048`, …). `GET /hosts` lists each host's failing doctors (`doctorFailed`), and `GET /hosts?repo=<id>` (`wd hosts --repo`) adds `why`: the same check for a new thread of that repo on each host, `null` when it would start there.. `null` means it starts on the next tick.
+  Light turns of a repo cannot shrink a heavy thread's estimate this way, or its memory cap. So light turns of a repo cannot shrink a heavy thread's estimate, or the memory cap that comes from it (twice the estimate). An out-of-memory kill raises it. The cap is per turn: it stops one runaway command before it takes the host's memory from the other threads, so a turn can be killed while the host still has plenty free. The failure reason names the cap, the estimate and the step that was running.
+- **Memory cap:** twice the memory estimate. An out-of-memory kill raises the estimate. The cap is per turn: it stops one runaway command before it takes the host's memory from the other threads, so a turn can be killed while the host still has plenty free. The failure reason names the cap, the estimate and the step that was running.
+- **Reservations:** every running turn on a host counts the part of its estimates it is not using against that host, however long it has run: for memory, its estimate minus its peak so far; for CPU, its estimate minus its rate over the last minute. The probe only shows what turns use now; a build that peaks later must not find its memory or cores given to another thread.
+- **Follow-ups** go through the same checks on their thread's host, and wait there for room.
+
+A thread that fits nowhere stays queued, and later threads can still be placed past it. `GET /queue` (`wd queue`) runs the same checks without placing anything and says, for each queued thread and each pending follow-up, why it has not started: the usage-limit hold, or each host's first failing check (`lacks label gpu`, `cpu 11.6 of 8 cores busy or promised, needs 0.5`, `doctor failed: bun: not found`, `memory 3000 MB free, needs 2048+2048`, …). `GET /hosts` lists each host's failing doctors (`doctorFailed`), and `GET /hosts?repo=<id>` (`wd hosts --repo`) adds `why`: the same check for a new thread of that repo on each host, `null` when it would start there.. `null` means it starts on the next tick.
 
 When an agent reports a `rate_limit_event` with status `rejected`, all new starts are held until the reset time. The hold is reported to the affected callers.
 
@@ -165,7 +172,7 @@ Hosts and repos can be listed in `coord.json` or registered through the caller A
 | `callerToken` | required | token for submitters |
 | `hosts.<name>` | | `{url, token, labels?, maxThreads?}`; labels and `maxThreads` normally come from the agent. Optional: hosts can be registered through the API |
 | `repos.<owner/name>` | | `{url, defaultRef, doctor?, requires?, rust?}`. Optional: repos can be registered through the API |
-| `floors` | `{diskFreePct: 15, memReserveMb: 2048}` | placement floors |
+| `floors` | `{diskFreePct: 15, memReserveMb: 2048, cpuOversub: 1.5}` | placement floors; `cpuOversub` is how far past its cores a host may be committed |
 | `tickMs`, `lostAfterSec`, `asleepLostSec`, `stallMin`, `runtimeMaxSec` | 5000, 120, 21600, 20, 14400 | timings |
 
 **Agent:** `~/.config/wd/agent.json`, the path in `WD_AGENT_CONFIG`, or `wd agent --config <file>`.
@@ -176,7 +183,7 @@ Hosts and repos can be listed in `coord.json` or registered through the caller A
 | `listen` | `0.0.0.0:7781` | `host install` binds it to the host's Tailscale address |
 | `claude` | `claude` | path to the CLI |
 | `labels` | `[]` | labels threads can require, besides the host's name |
-| `maxThreads` | 4 | concurrent turns |
+| `maxThreads` | none | optional cap on concurrent turns; without it memory and CPU decide |
 | `dataDir` | `~/.wd` | mirrors, worktrees, turns, target dirs |
 | `gitTokenFile` | | GitHub token used for pushes |
 | `path` | the login shell's PATH | PATH for doctors and turns |

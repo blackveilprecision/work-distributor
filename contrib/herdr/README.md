@@ -3,7 +3,7 @@
 A panel for the [Herdr](https://herdr.dev) app that shows wd's queue across every caller:
 
 - what waits for a host, and why, host by host (queued threads and follow-ups);
-- each host's running threads with their latest step, and its free memory, disk and slots;
+- each host's running threads with their latest step, and its CPU in use or promised, free memory and disk;
 - threads that are idle with their worktree kept.
 
 Clicking a row opens more: a running thread's recent steps (`wd tail`), a host's eligibility for each repo, a

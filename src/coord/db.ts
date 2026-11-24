@@ -15,6 +15,8 @@ export interface TurnRow {
   thread: string; n: number; epoch: number; host: string; started: number; ended: number | null; kind: string | null;
   cost: number; mem_peak: number; result: string | null; est_mb: number; mem_max: number;
   last_activity: number; cpu_ms: number; committed: number;
+  // CPU in cores: the estimate at start, the last one-minute rate, and the highest one-minute rate; cpu_at/cpu_base start the window.
+  est_cpu: number; cpu_rate: number; cpu_peak: number; cpu_at: number | null; cpu_base: number;
 }
 export interface HostRow { name: string; hb: string; seen: number; state: string; reason: string | null; since: number }
 
@@ -51,6 +53,8 @@ export class Db {
     this.raw.exec(SCHEMA);
     // Added after the first release: when each event batch arrived. Fails harmlessly once the column exists.
     try { this.raw.exec("ALTER TABLE events ADD COLUMN at INTEGER"); } catch {}
+    for (const c of ["est_cpu REAL DEFAULT 0", "cpu_rate REAL DEFAULT 0", "cpu_peak REAL DEFAULT 0", "cpu_at INTEGER", "cpu_base INTEGER DEFAULT 0"])
+      try { this.raw.exec(`ALTER TABLE turns ADD COLUMN ${c}`); } catch {}
   }
   all<T>(sql: string, ...p: any[]): T[] { return this.raw.query(sql).all(...p) as T[]; }
   get<T>(sql: string, ...p: any[]): T | null { return (this.raw.query(sql).get(...p) as T) ?? null; }
