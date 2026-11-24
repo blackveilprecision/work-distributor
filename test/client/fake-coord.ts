@@ -41,7 +41,8 @@ export function fakeCoord(token = "tok") {
       if (ackM) { acked.push(Number(ackM[1])); return Response.json({ ok: true }); }
       if (u.pathname === "/reports") return Response.json(pending.filter((r) => !acked.includes(r.id)));
       if (u.pathname === "/threads" && req.method === "POST") return Response.json({ id: "th1", position: 0 });
-      if (u.pathname === "/threads") return Response.json([]);
+      if (u.pathname === "/threads") return Response.json(Array.from({ length: 60 }, (_, i) =>
+        ({ id: `t${i}`, tag: null, state: "done", host: "box1", turns: 1, reason: null, prompt: "p".repeat(5000), lastMessage: "m".repeat(4000) })));
       if (u.pathname === "/hosts") return Response.json([]);
       if (u.pathname === "/repos" && req.method === "GET") return Response.json([{ id: "acme/shop", url: "u", defaultRef: "main", doctor: "true", requires: ["gpu"], rust: true, source: "db" }]);
       if (u.pathname.startsWith("/repos/")) return Response.json({ ...body, source: u.pathname.endsWith("o%2Fcfg") ? "config" : "db" });

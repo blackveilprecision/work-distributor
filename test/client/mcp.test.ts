@@ -44,8 +44,12 @@ test("tools call the coordinator and return at once", async () => {
   expect(coord.reqs.at(-1)!.path).toBe("/threads/th1/cancel");
   await client.callTool({ name: "wd_release", arguments: { thread: "th1" } });
   expect(coord.reqs.at(-1)!.path).toBe("/threads/th1/release");
-  await client.callTool({ name: "wd_status", arguments: {} });
+  const ls: any = await client.callTool({ name: "wd_status", arguments: {} });
   expect(coord.reqs.at(-1)!.path).toBe("/threads?caller=t%3Ax");
+  const list = JSON.parse(ls.content[0].text);
+  expect(list.threads).toHaveLength(50);
+  expect(list.more).toBe(10);
+  expect(list.threads[0]).toEqual({ id: "t0", tag: null, state: "done", host: "box1", turns: 1, reason: null });
   await client.callTool({ name: "wd_status", arguments: { thread: "th1" } });
   expect(coord.reqs.at(-1)!.path).toBe("/threads/th1");
   await client.callTool({ name: "wd_hosts", arguments: {} });

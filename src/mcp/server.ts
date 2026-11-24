@@ -3,7 +3,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { ack, call, loadCfg, qs, reportText, type Cfg } from "../cli/client.ts";
-import type { Report } from "../shared/types.ts";
+import type { Report, ThreadView } from "../shared/types.ts";
 
 const str = { type: "string" };
 const tool = (name: string, description: string, props: Record<string, unknown> = {}, required: string[] = []) =>
@@ -16,7 +16,7 @@ const TOOLS = [
   tool("wd_send", "Queue a follow-up turn on an existing thread.", { thread: str, text: str }, ["thread", "text"]),
   tool("wd_cancel", "Cancel a thread.", { thread: str }, ["thread"]),
   tool("wd_release", "Free a thread's worktree (the branch stays pushed).", { thread: str }, ["thread"]),
-  tool("wd_status", "State of one thread, or of all this caller's threads when no thread is given. Not needed to get results. full: the whole last message, which reports cut at 4000 chars.", { thread: str, full: { type: "boolean" } }),
+  tool("wd_status", "State of one thread, or a one-line summary of this caller's newest 50 threads when no thread is given. Not needed to get results. full: the whole last message, which reports cut at 4000 chars.", { thread: str, full: { type: "boolean" } }),
   tool("wd_hosts", "List hosts and their headroom."),
   tool("wd_inbox", "Unacknowledged reports (backup for channel delivery)."),
   tool("wd_ack", "Acknowledge a report by id.", { id: { type: "number" } }, ["id"]),
@@ -27,11 +27,18 @@ const HANDLERS: Record<string, (cfg: Cfg, a: any) => Promise<unknown>> = {
   wd_send: (cfg, a) => call(cfg, "POST", `/threads/${a.thread}/send`, { text: a.text }),
   wd_cancel: (cfg, a) => call(cfg, "POST", `/threads/${a.thread}/cancel`),
   wd_release: (cfg, a) => call(cfg, "POST", `/threads/${a.thread}/release`),
-  wd_status: (cfg, a) => call(cfg, "GET", a.thread ? `/threads/${a.thread}${a.full ? "?full=1" : ""}` : `/threads${qs({ caller: cfg.caller })}`),
+  wd_status: (cfg, a) => a.thread ? call(cfg, "GET", `/threads/${a.thread}${a.full ? "?full=1" : ""}`) : list(cfg),
   wd_hosts: (cfg) => call(cfg, "GET", "/hosts"),
   wd_inbox: (cfg) => call(cfg, "GET", `/reports${qs({ caller: cfg.caller })}`),
   wd_ack: (cfg, a) => ack(cfg, a.id),
 };
+
+// One line per thread, newest 50: the full views (prompt-sized messages, up to 500 threads) overflow a tool result.
+async function list(cfg: Cfg) {
+  const all = (await call(cfg, "GET", `/threads${qs({ caller: cfg.caller })}`)) as ThreadView[];
+  const rows = all.slice(0, 50).map((t) => ({ id: t.id, tag: t.tag, state: t.state, host: t.host, turns: t.turns, reason: t.reason?.slice(0, 200) ?? null }));
+  return { threads: rows, more: Math.max(all.length - 50, 0), note: "wd_status with a thread id has the details" };
+}
 
 export function createServer(cfg: Cfg): Server {
   const server = new Server({ name: "wd", version: "0.1.0" }, {
