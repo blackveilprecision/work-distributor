@@ -63,16 +63,22 @@ export async function probe(cfg: AgentConfig): Promise<Probe> {
   }
   return {
     os, cores: cpus().length, memTotalMb: Math.round(totalmem() / 1048576), memAvailMb: await memAvailMb(),
-    load1: Math.round(loadavg()[0] * 100) / 100, cpuScore: score ??= bench(),
+    load1: Math.round(loadavg()[0] * 100) / 100, cpuScore: speed(),
     diskFreePct, diskFreeGb: Math.round((fs.bavail * fs.bsize) / 1e9), claudeVersion,
     loginOk: !!lg?.ok, loginError: lg && !lg.ok ? lg.error : null, loginExpiresAt: lg?.expires ?? null, problems,
   };
 }
 
-// Single-core speed, measured once per agent start: units per second of sorting 20k numbers and a JSON round trip,
+// A busy host benchmarks slow, and a host never gets faster, so the score is the best seen, re-measured every 10 minutes.
+let score = 0, scoredAt = 0;
+function speed(now = Date.now()): number {
+  if (!score || now - scoredAt >= 600_000) { score = Math.max(score, bench()); scoredAt = now; }
+  return score;
+}
+
+// Single-core speed: units per second of sorting 20k numbers and a JSON round trip,
 // best of three 200 ms runs so a busy moment at start costs little. Plain JS on purpose: a hash benchmark rewards
 // SHA instructions that compilers and test runners never use. The coordinator compares it across hosts.
-let score: number | undefined;
 export function bench(ms = 200): number {
   const unit = () => {
     const a = new Array<number>(20000);

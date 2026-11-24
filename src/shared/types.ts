@@ -47,7 +47,7 @@ export interface HostView {
   name: string; os: "linux" | "darwin"; state: HostState; reason: string | null; labels: string[];
   cores: number; memTotalMb: number; memAvailMb: number; diskFreePct: number;
   load1: number;               // 1-minute load average: every process on the host, wd's or not
-  cpuScore: number | null;     // single-core benchmark (agent/probe.ts bench): relative host speed
+  cpuScore: number | null;     // single-core benchmark, the best seen (agent/probe.ts): relative host speed
   cpuPromisedCores: number;    // CPU promised to running turns and not in use yet
   running: number; maxThreads: number | null;   // null: no cap, memory and CPU decide claudeVersion: string | null; loginExpiresAt: number | null; lastSeenAt: number | null;
   doctorFailed: string[];      // repos whose doctor fails here: none of their threads go to this host
