@@ -113,6 +113,12 @@ export function makeHandler(s: Scheduler, reports: Reports) {
       return json(hostViews(s, repo));
     }
     if (method === "GET" && path === "/queue") return json(s.queue(hostViews(s)));
+    // The usage-limit hold ends at the reset time Claude gave; a limit reset early (by the owner) is cleared here.
+    if (method === "DELETE" && path === "/hold") {
+      const was = Number(s.db.meta("hold_until") ?? 0) || null;
+      s.db.run("DELETE FROM meta WHERE k='hold_until'");
+      return json({ cleared: was !== null && was > Date.now(), was: was ? new Date(was).toISOString() : null });
+    }
     if (method === "PUT" && (m = path.match(/^\/hosts\/([^/]+)$/))) {
       const name = decodeURIComponent(m[1]), url = String(body?.url ?? "").replace(/\/$/, "");
       if (!NAME.test(name)) throw new HttpError(400, "bad host name");

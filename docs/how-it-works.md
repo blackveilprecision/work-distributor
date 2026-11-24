@@ -50,7 +50,7 @@ The thread goes to the qualifying host where it would run fastest: the host's si
 
 A thread that fits nowhere stays queued, and later threads can still be placed past it. `GET /queue` (`wd queue`) runs the same checks without placing anything and says, for each queued thread and each pending follow-up, why it has not started: the usage-limit hold, or each host's first failing check (`lacks label gpu`, `cpu 11.6 of 8 cores busy or promised, needs 0.5`, `doctor failed: bun: not found`, `memory 3000 MB free, needs 2048+2048`, …). `GET /hosts` lists each host's failing doctors (`doctorFailed`), and `GET /hosts?repo=<id>` (`wd hosts --repo`) adds `why`: the same check for a new thread of that repo on each host, `null` when it would start there.. `null` means it starts on the next tick.
 
-When an agent reports a `rate_limit_event` with status `rejected`, all new starts are held until the reset time. The hold is reported to the affected callers.
+When an agent reports a `rate_limit_event` with status `rejected`, all new starts are held until the reset time. The hold is reported to the affected callers. A limit reset early (by the account owner) is not visible to wd: `DELETE /hold` (`wd hold --clear`) ends the hold, and `wd hold` shows it.
 
 ## Running a turn (agent)
 1. Fetch or clone the mirror at `~/.wd/repos/<owner>__<repo>.git`, then create or reuse the worktree at `~/.wd/wt/<thread>`.

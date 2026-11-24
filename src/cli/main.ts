@@ -213,6 +213,16 @@ const queue = defineCommand({
   },
 });
 
+const hold = defineCommand({
+  meta: { name: "hold", description: "Show the usage-limit hold: after Claude rejects a turn for the usage limit, no new turn starts until the reset time it gave." },
+  args: { clear: { type: "boolean", description: "End the hold now, for a limit that was reset early (DELETE /hold)" }, ...caller },
+  async run({ args }) {
+    if (args.clear) return json(await call(cfgOf(args), "DELETE", "/hold"));
+    const h = ((await call(cfgOf(args), "GET", "/queue")) as QueueView).holdUntil;
+    console.log(h ? `new starts held until ${new Date(h).toISOString()} (wd hold --clear ends it)` : "no hold");
+  },
+});
+
 const repoId = { id: { type: "positional", required: true, valueHint: "owner/name", description: "Repo id; without --url it means https://github.com/<id>.git" } } as const satisfies ArgsDef;
 const repo = defineCommand({
   meta: { name: "repo", description: "Register, list and remove the repos threads may run on." },
@@ -338,7 +348,7 @@ export const main = defineCommand({
     description: "Queue Claude Code threads, run them on your hosts, and get reports back. The coordinator's address and token come from WD_URL and WD_TOKEN, or ~/.config/wd/client.json (WD_CLIENT_CONFIG names another file).",
   },
   subCommands: {
-    submit, ls, status, send, cancel, release, tail: tailCmd, reports, ack: ackCmd, queue, hosts, repo,
+    submit, ls, status, send, cancel, release, tail: tailCmd, reports, ack: ackCmd, queue, hold, hosts, repo,
     coord, host, agent, mcp, "init-local": initLocal,
   },
 });

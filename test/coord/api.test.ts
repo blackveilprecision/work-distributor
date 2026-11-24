@@ -289,3 +289,20 @@ describe("mcp tools", () => {
     expect((await call("POST", "/mcp/call", { name: "wd_status", arguments: { thread: "zz" }, caller: "c" })).status).toBe(404);
   });
 });
+
+describe("usage-limit hold", () => {
+  test("DELETE /hold ends a hold early, and the queue starts again", async () => {
+    const { h, call } = api();
+    await ready(h, ["a"]);
+    h.db.setMeta("hold_until", String(Date.now() + 3_600_000));
+    const id = (await call("POST", "/threads", { caller: "c", repo: "o/app", prompt: "p" })).body.id;
+    await h.sched.tick();
+    expect(h.db.thread(id)!.state).toBe("queued");
+    const r = await call("DELETE", "/hold");
+    expect(r.body).toMatchObject({ cleared: true, was: expect.any(String) });
+    expect((await call("GET", "/queue")).body.holdUntil).toBeNull();
+    await h.sched.tick();
+    expect(h.db.thread(id)!.state).toBe("running");
+    expect((await call("DELETE", "/hold")).body).toEqual({ cleared: false, was: null });
+  });
+});
