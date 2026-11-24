@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classify, claudeArgs, cpuCounter, cpuMsOf, status, sweep, type TurnMeta, parsePs, quote, runScript, systemdRunArgs, treeOf, turnEnv, outside } from "../../src/agent/launch";
+import { classify, claudeArgs, cpuCounter, cpuMsOf, status, sweep, type TurnMeta, parsePs, quote, runScript, systemdRunArgs, treeOf, turnEnv, outside, cargoWrapper } from "../../src/agent/launch";
 import { readLines } from "../../src/agent/tail";
 import { authArgs, leaseTarget, poolSize, releaseTarget } from "../../src/agent/workspace";
 import { loadConfig } from "../../src/agent/config";
@@ -256,4 +256,18 @@ test("the speed score is the best seen, and a saved one survives a restart", asy
   writeFileSync(file, "999999");   // measured while the host was quiet
   expect(speed(file)).toBe(999999);
   expect(require("node:fs").readFileSync(file, "utf8")).toBe("999999");
+});
+
+test("a rustc-wrapper in the host's or the repo's cargo config keeps wd from setting RUSTC_WRAPPER", () => {
+  const home = mkdtempSync(join(tmpdir(), "wd-home-")), wt = mkdtempSync(join(tmpdir(), "wd-wt-"));
+  expect(cargoWrapper(home, wt)).toBe(false);
+  mkdirSync(join(home, ".cargo"));
+  writeFileSync(join(home, ".cargo/config.toml"), '[build]\njobs = 4\n');
+  expect(cargoWrapper(home, wt)).toBe(false);
+  writeFileSync(join(home, ".cargo/config.toml"), '[build]\nrustc-wrapper = "/home/u/.local/bin/kache"\n');
+  expect(cargoWrapper(home, wt)).toBe(true);
+  rmSync(join(home, ".cargo/config.toml"));
+  mkdirSync(join(wt, ".cargo"));
+  writeFileSync(join(wt, ".cargo/config"), 'build.rustc-wrapper = "x"\n');
+  expect(cargoWrapper(home, wt)).toBe(true);
 });

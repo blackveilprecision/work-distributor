@@ -64,10 +64,18 @@ export function systemdRunArgs(o: { unit: string; dir: string; cwd: string; memo
   ];
 }
 
+// RUSTC_WRAPPER would win over a rustc-wrapper the host or the repo set in a cargo config (kache, say), so sccache is
+// only the default for hosts that chose none.
+export function cargoWrapper(home: string, wt: string): boolean {
+  return [join(home, ".cargo"), join(wt, ".cargo")].some((d) => ["config.toml", "config"].some((f) => {
+    try { return /^\s*(build\.)?rustc-wrapper\s*=/m.test(readFileSync(join(d, f), "utf8")); } catch { return false; }
+  }));
+}
+
 export async function launch(cfg: AgentConfig, s: StartTurn, wt: string, target: string | null): Promise<TurnMeta> {
   const key = turnKey(s), dir = turnDir(cfg, key);
   mkdirSync(dir, { recursive: true });
-  const sccache = target ? Bun.which("sccache", { PATH: cfg.path }) : null;
+  const sccache = target && !cargoWrapper(process.env.HOME ?? userInfo().homedir, wt) ? Bun.which("sccache", { PATH: cfg.path }) : null;
   const mode = process.platform === "linux" ? "systemd" : "pgroup";
   const meta: TurnMeta = { s, key, dir, wt, mode, pid: null, unit: mode === "systemd" ? `wd-${key}` : null, startedAt: Date.now(), target };
   writeFileSync(join(dir, "prompt.txt"), s.prompt);

@@ -54,7 +54,7 @@ When an agent reports a `rate_limit_event` with status `rejected`, all new start
 
 ## Running a turn (agent)
 1. Fetch or clone the mirror at `~/.wd/repos/<owner>__<repo>.git`, then create or reuse the worktree at `~/.wd/wt/<thread>`.
-2. For repos marked `rust`, lease a target directory from a pool of `targetDirPool` per repo, and set `RUSTC_WRAPPER=sccache` if sccache is installed.
+2. For repos marked `rust`, lease a target directory from a pool of `targetDirPool` per repo, and set `RUSTC_WRAPPER=sccache` if sccache is installed and no cargo config the turn reads (`~/.cargo/config.toml` or the repo's `.cargo/config.toml`) already names a `rustc-wrapper`: the variable would override that choice (kache, for one).
 3. Write `~/.wd/turns/<thread>-<epoch>-<turn>/run.sh`. It runs `claude` under `env -i` with this fixed environment:
    - HOME, USER, LOGNAME, `SHELL=/bin/bash`;
    - PATH: `path` from `agent.json`, or else the PATH an interactive login shell of the host user prints (`$SHELL -lic`, bash or zsh), read once when the agent starts, followed by the service's own. Tools that add themselves only in `~/.bashrc` or `~/.zshrc` (bun, nvm) are found this way;
