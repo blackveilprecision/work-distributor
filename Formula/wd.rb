@@ -6,23 +6,23 @@ class Wd < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/blackveilprecision/work-distributor/releases/download/v0.4.0/wd-darwin-arm64"
-      sha256 "8828a7ae75ab153dc3e6a8ec883370eb142d3f4589617741659e6614d6de5a89"
+      url "https://github.com/blackveilprecision/work-distributor/releases/download/v0.4.1/wd-darwin-arm64"
+      sha256 "afa01eac2339187116034b051e61c671a43cc29dcf1e1806f733ef322715a77f"
     end
     on_intel do
-      url "https://github.com/blackveilprecision/work-distributor/releases/download/v0.4.0/wd-darwin-x64"
-      sha256 "d4271a12462417b8ff8fa7615639c3f061d1cef4aa0d3e8f839e3ca3fc355ef5"
+      url "https://github.com/blackveilprecision/work-distributor/releases/download/v0.4.1/wd-darwin-x64"
+      sha256 "b857f0aa53e0e1c0c7bf2ca4d7283d12318280e4d98774517673d41a789f158d"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/blackveilprecision/work-distributor/releases/download/v0.4.0/wd-linux-arm64"
-      sha256 "9b226f52d7ec22b9801b954b6cdfe03e74f01d0cb6c32a2474195148428c7cf7"
+      url "https://github.com/blackveilprecision/work-distributor/releases/download/v0.4.1/wd-linux-arm64"
+      sha256 "ba740bb8d7eff8ecf824d0b8fc1a05d787c564b39b468c39140481ad6659d7fb"
     end
     on_intel do
-      url "https://github.com/blackveilprecision/work-distributor/releases/download/v0.4.0/wd-linux-x64"
-      sha256 "9925af70c047766c5ada135e17d58a200453b97781224efd2fea121b814ab843"
+      url "https://github.com/blackveilprecision/work-distributor/releases/download/v0.4.1/wd-linux-x64"
+      sha256 "84bf77950e6f228fcd1e5b1aa3d51208e9ee26477ae58f2fccf30c92d5c6f0fc"
     end
   end
 
