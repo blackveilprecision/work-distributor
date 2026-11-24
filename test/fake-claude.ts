@@ -48,6 +48,11 @@ if (kw("COMMIT")) {
   for (const a of [["add", f], ["-c", "user.name=fake", "-c", "user.email=fake@x", "commit", "-qm", `fake commit ${f}`]]) Bun.spawnSync(["git", ...a]);
 }
 if (kw("DIRTY")) await Bun.write("dirty.txt", "left behind\n");
+// A child in a process group of its own, as Claude Code's Bash tool runs every command; its pid goes to group-child.pid.
+if (kw("GROUPCHILD")) {
+  const c = Bun.spawn(["/bin/sh", "-c", "exec sleep 300"], { detached: true, stdio: ["ignore", "ignore", "ignore"] });
+  await Bun.write("group-child.pid", String(c.pid));
+}
 if (kw("BIGLINE")) say("x".repeat(10 * 1024 * 1024));
 const tick = kw("TICK");
 if (tick) for (let i = 0; i < Number(tick[1]); i++) { say(`tick ${i}`); await Bun.sleep(100); }

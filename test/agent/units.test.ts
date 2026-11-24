@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classify, claudeArgs, cpuCounter, cpuMsOf, status, sweep, type TurnMeta, parsePs, quote, runScript, systemdRunArgs, turnEnv } from "../../src/agent/launch";
+import { classify, claudeArgs, cpuCounter, cpuMsOf, status, sweep, type TurnMeta, parsePs, quote, runScript, systemdRunArgs, treeOf, turnEnv, outside } from "../../src/agent/launch";
 import { readLines } from "../../src/agent/tail";
 import { authArgs, leaseTarget, poolSize, releaseTarget } from "../../src/agent/workspace";
 import { loadConfig } from "../../src/agent/config";
@@ -73,11 +73,40 @@ describe("run script and environment", () => {
     expect(cpuMsOf("0:01.50")).toBe(1500);
     expect(cpuMsOf("1:02:03.00")).toBe(3_723_000);
     expect(cpuMsOf("2-00:00:01")).toBe(172_801_000);
-    const rows = parsePs("  10  10  2048 Ss  0:00.10 /bin/bash /d/turns/t/run.sh\n  11  10  4096 S   0:02.00 node x y z\ngarbage\n");
+    const rows = parsePs("  10  1  10  2048 Ss  0:00.10 /bin/bash /d/turns/t/run.sh\n  11  10  10  4096 S   0:02.00 node x y z\ngarbage\n");
     expect(rows).toEqual([
-      { pid: 10, pgid: 10, rssKb: 2048, stat: "Ss", cpuMs: 100, cmd: "/bin/bash /d/turns/t/run.sh" },
-      { pid: 11, pgid: 10, rssKb: 4096, stat: "S", cpuMs: 2000, cmd: "node x y z" },
+      { pid: 10, ppid: 1, pgid: 10, rssKb: 2048, stat: "Ss", cpuMs: 100, cmd: "/bin/bash /d/turns/t/run.sh" },
+      { pid: 11, ppid: 10, pgid: 10, rssKb: 4096, stat: "S", cpuMs: 2000, cmd: "node x y z" },
     ]);
+  });
+
+  test("linux: work a turn started outside its unit is found by working directory, with its descendants", () => {
+    const proc = tmp(), wt = "/home/u/.wd/wt/t1";
+    // stat fields after "(comm) ": state ppid pgrp ... utime(12th) stime(13th) ... rss(22nd)
+    const stat = (pid: number, ppid: number, ticks: number, pages: number) =>
+      `${pid} (x) S ${ppid} ${pid} ${Array(8).fill(0).join(" ")} ${ticks} 0 ${Array(8).fill(0).join(" ")} ${pages} 0`;
+    const add = (pid: number, ppid: number, cwd: string, cg: string, ticks: number, pages: number) => {
+      mkdirSync(join(proc, String(pid)));
+      writeFileSync(join(proc, `${pid}/stat`), stat(pid, ppid, ticks, pages));
+      writeFileSync(join(proc, `${pid}/cgroup`), `0::/user.slice/${cg}\n`);
+      symlinkSync(cwd, join(proc, `${pid}/cwd`));
+    };
+    add(10, 1, wt, "app.slice/wd-t1-1-1.service", 500, 1000);          // the turn itself: the unit counts it
+    add(20, 1, wt, "app.slice/hc-server.service", 100, 256);           // an hc terminal in the worktree
+    add(21, 20, "/home/u/.cargo/registry/x", "app.slice/hc-server.service", 300, 512);   // its compiler, elsewhere
+    add(30, 1, "/home/u/other", "app.slice/hc-server.service", 900, 9999);           // unrelated
+    add(40, 1, `${wt}/sub`, "app.slice/wd-t1-1-1.service/inner.scope", 50, 50);     // nested in the unit
+    // The first look is a baseline (an agent restart must not count their past CPU at once); growth after it counts.
+    expect(outside({ key: "t1-1-1", wt, unit: "wd-t1-1-1" }, proc)).toEqual({ cpuMs: 0, memMb: 3 });   // (256+512) pages x 4 KiB
+    writeFileSync(join(proc, "21/stat"), stat(21, 20, 700, 512));
+    expect(outside({ key: "t1-1-1", wt, unit: "wd-t1-1-1" }, proc)).toEqual({ cpuMs: 4000, memMb: 3 });   // 400 more ticks x 10 ms
+  });
+
+  test("a turn's processes are its group and every descendant, also in process groups of their own", () => {
+    const p = (pid: number, ppid: number, pgid: number) => ({ pid, ppid, pgid, rssKb: 1, stat: "S", cpuMs: 0, cmd: "x" });
+    // 10 run.sh -> 11 claude -> 20 bash (own group, as Claude Code's Bash tool does) -> 21 cargo -> 22 rustc; 30 is unrelated
+    const rows = [p(10, 1, 10), p(11, 10, 10), p(20, 11, 20), p(21, 20, 20), p(22, 21, 20), p(30, 1, 30)];
+    expect(treeOf(rows, (r) => r.pgid === 10).map((r) => r.pid).sort()).toEqual([10, 11, 20, 21, 22]);
   });
 });
 
@@ -219,4 +248,12 @@ describe("darwin process group (ps based)", () => {
 test("the speed benchmark gives a positive score", async () => {
   const { bench } = await import("../../src/agent/probe");
   expect(bench(20)).toBeGreaterThan(0);
+});
+
+test("the speed score is the best seen, and a saved one survives a restart", async () => {
+  const { speed } = await import("../../src/agent/probe");
+  const file = join(mkdtempSync(join(tmpdir(), "wd-speed-")), "speed");
+  writeFileSync(file, "999999");   // measured while the host was quiet
+  expect(speed(file)).toBe(999999);
+  expect(require("node:fs").readFileSync(file, "utf8")).toBe("999999");
 });

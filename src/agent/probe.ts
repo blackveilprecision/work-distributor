@@ -1,6 +1,7 @@
 // What the host looks like right now, and whether it can run a session at all. Anything in `problems` refuses the host.
-import { existsSync, mkdirSync, readFileSync, statfsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statfsSync, writeFileSync } from "node:fs";
 import { cpus, freemem, loadavg, totalmem, userInfo } from "node:os";
+import { join } from "node:path";
 import type { Probe } from "../shared/types";
 import { type AgentConfig, run } from "./config";
 
@@ -66,17 +67,24 @@ export async function probe(cfg: AgentConfig): Promise<Probe> {
   }
   return {
     os, cores: cpus().length, memTotalMb: Math.round(totalmem() / 1048576), memAvailMb: await memAvailMb(),
-    load1: Math.round(loadavg()[0] * 100) / 100, cpuScore: speed(),
+    load1: Math.round(loadavg()[0] * 100) / 100, cpuScore: speed(join(cfg.dataDir, "speed")),
     diskFreePct, diskFreeGb: Math.round((fs.bavail * fs.bsize) / 1e9), claudeVersion,
     loginOk: !!lg?.ok, loginError: lg && !lg.ok ? lg.error : null, loginExpiresAt: lg?.expires ?? null, problems,
   };
 }
 
-// A busy host benchmarks slow, and a host never gets faster, so the score is the best seen, re-measured every 10 minutes.
-let score = 0, scoredAt = 0;
-function speed(now = Date.now()): number {
-  if (!score || now - scoredAt >= 600_000) { score = Math.max(score, bench()); scoredAt = now; }
-  return score;
+// A busy host benchmarks slow, and a host never gets faster, so the score is the best seen, re-measured every 10 minutes
+// and kept in the data dir: an agent that restarts on a busy host keeps what it measured while the host was quiet.
+const scores = new Map<string, { score: number; at: number }>();
+export function speed(file: string, now = Date.now()): number {
+  let c = scores.get(file);
+  if (!c) scores.set(file, (c = { score: Number(existsSync(file) ? readFileSync(file, "utf8") : 0) || 0, at: 0 }));
+  if (!c.at || now - c.at >= 600_000) {
+    const best = Math.max(c.score, bench());
+    if (best > c.score) { c.score = best; try { writeFileSync(file, String(best)); } catch {} }
+    c.at = now;
+  }
+  return c.score;
 }
 
 // Single-core speed: units per second of sorting 20k numbers and a JSON round trip,

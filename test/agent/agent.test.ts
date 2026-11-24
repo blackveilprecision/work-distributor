@@ -144,6 +144,19 @@ describe("limits and stopping", () => {
     expect(existsSync(join(h.turnDir(t), "ended"))).toBe(true);
   });
 
+  test("/stop also kills descendants in process groups of their own (macOS: the Bash tool's commands)", async () => {
+    if (process.platform !== "darwin") return;
+    const t = h.turn({ prompt: "GROUPCHILD SLEEP:60" });
+    await h.call("/start", t);
+    const pidFile = join(h.cfg.dataDir, "wt/t1/group-child.pid");
+    await until(() => existsSync(pidFile) && readFileSync(pidFile, "utf8").length > 0, 10_000, "child started");
+    const child = Number(readFileSync(pidFile, "utf8"));
+    expect(alive(child)).toBe(true);
+    await h.call("/stop", { thread: "t1", epoch: 1 });
+    await until(() => h.agent.ctx.active.size === 0, 15_000, "turn dropped");
+    await until(() => !alive(child), 5_000, "child killed");
+  });
+
   test("a stopped turn never commits the worktree: changes left by the live turn are not pushed", async () => {
     const t = h.turn({ prompt: "SLEEP:60" });
     await h.call("/start", t);

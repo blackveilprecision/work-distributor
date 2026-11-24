@@ -1,7 +1,7 @@
 // One turn: the run file, the start, how it is doing, how it ended, how it is stopped.
 // Linux: a transient systemd user unit (ported from builder/lib/launch.mjs, which is proven). darwin: a detached
 // process group, because macOS has no cgroups and a process started over ssh cannot reach the keychain anyway.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { userInfo } from "node:os";
 import type { StartTurn, TurnEnd } from "../shared/types";
@@ -85,18 +85,18 @@ export async function launch(cfg: AgentConfig, s: StartTurn, wt: string, target:
   return meta;
 }
 
-// ---- darwin: the process group ----
+// ---- darwin: the process tree ----
 
 export function cpuMsOf(t: string): number {
   const [d, rest] = t.includes("-") ? t.split("-") : ["0", t];
   return Math.round((Number(d) * 86400 + rest.split(":").reduce((s, p) => s * 60 + Number(p), 0)) * 1000);
 }
-export interface Proc { pid: number; pgid: number; rssKb: number; stat: string; cpuMs: number; cmd: string }
+export interface Proc { pid: number; ppid: number; pgid: number; rssKb: number; stat: string; cpuMs: number; cmd: string }
 export function parsePs(text: string): Proc[] {
   const rows: Proc[] = [];
   for (const line of text.split("\n")) {
-    const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(.*)$/.exec(line);
-    if (m) rows.push({ pid: +m[1], pgid: +m[2], rssKb: +m[3], stat: m[4], cpuMs: cpuMsOf(m[5]), cmd: m[6] });
+    const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(.*)$/.exec(line);
+    if (m) rows.push({ pid: +m[1], ppid: +m[2], pgid: +m[3], rssKb: +m[4], stat: m[5], cpuMs: cpuMsOf(m[6]), cmd: m[7] });
   }
   return rows;
 }
@@ -104,18 +104,32 @@ export function parsePs(text: string): Proc[] {
 // plus the group. After run.sh (the only process with the dir in its command line, since env -i execs claude) is gone,
 // its pgid still names the survivors, and a pgid cannot be reused while the group has members. So the group is ours
 // unless a process with that very pid exists and is not our run.sh: only then was the pid handed to something else.
+// The descendants of those count too: Claude Code runs each Bash command in a process group of its own, so the group
+// alone held only claude, never the builds and tests a turn runs. A process that outlives its parent is reparented
+// to launchd and drops out (a daemon such as sccache's server, which serves every turn anyway).
 async function groupProcs(meta: TurnMeta): Promise<{ rows: Proc[]; ours: boolean }> {
-  const r = await run(["ps", "-axo", "pid=,pgid=,rss=,stat=,time=,command="], { timeout: 15_000 });
+  const r = await run(["ps", "-axo", "pid=,ppid=,pgid=,rss=,stat=,time=,command="], { timeout: 15_000 });
   const rows = parsePs(r.out).filter((p) => !p.stat.startsWith("Z"));
   const lead = rows.find((p) => p.pid === meta.pid);
   const ours = meta.pid !== null && !(lead && !lead.cmd.includes(meta.dir));
-  return { rows: rows.filter((p) => p.cmd.includes(meta.dir) || (ours && p.pgid === meta.pid)), ours };
+  return { rows: treeOf(rows, (p) => p.cmd.includes(meta.dir) || (ours && p.pgid === meta.pid)), ours };
+}
+
+export function treeOf(rows: Proc[], root: (p: Proc) => boolean): Proc[] {
+  const kids = new Map<number, Proc[]>();
+  for (const p of rows) kids.set(p.ppid, [...(kids.get(p.ppid) ?? []), p]);
+  const out = new Map<number, Proc>(), todo = rows.filter(root);
+  for (let p; (p = todo.pop()); ) if (!out.has(p.pid)) { out.set(p.pid, p); todo.push(...(kids.get(p.pid) ?? [])); }
+  return [...out.values()];
 }
 
 // CPU time of processes that exited is gone from ps, so the plain sum of what is alive goes down as well as up (a build
 // of short compiler processes). The counter adds each pid's growth since it was last seen and never goes down.
 const cpuSeen = new Map<string, { last: Map<number, number>; total: number }>();
-export function cpuCounter(key: string, rows: { pid: number; cpuMs: number }[]): number {
+// seed: the first call only records where each process is, so processes already running (an agent restart finds the
+// hc terminals mid-build) do not count their whole past CPU as if it was spent in one heartbeat.
+export function cpuCounter(key: string, rows: { pid: number; cpuMs: number }[], seed = false): number {
+  if (seed && !cpuSeen.has(key)) { cpuSeen.set(key, { last: new Map(rows.map((p) => [p.pid, p.cpuMs])), total: 0 }); return 0; }
   const c = cpuSeen.get(key) ?? { last: new Map<number, number>(), total: 0 };
   cpuSeen.set(key, c);
   const now = new Map<number, number>();
@@ -128,7 +142,37 @@ export function cpuCounter(key: string, rows: { pid: number; cpuMs: number }[]):
   return c.total;
 }
 
-// ---- linux: the unit ----
+// ---- linux: the unit, and what the turn started outside it ----
+
+// A command a turn starts through `hc run` is started by the hc server, outside the turn's unit. It is found by its
+// working directory, the turn's worktree, and counted with its descendants (a compiler runs in a crate's own folder).
+// Only measured, never moved into the unit: the unit's end would kill work the thread left running on purpose.
+export function outside(meta: Pick<TurnMeta, "key" | "wt" | "unit">, proc = "/proc"): { cpuMs: number; memMb: number } {
+  const rows: Proc[] = [], roots = new Set<number>(), unit = `/${meta.unit}.service`;
+  for (const d of readdirSync(proc)) {
+    if (!/^\d+$/.test(d)) continue;
+    try {
+      if (readFileSync(`${proc}/${d}/cgroup`, "utf8").split("\n").some((l) => l.endsWith(unit) || l.includes(`${unit}/`))) continue;   // the unit counts these
+      const t = readFileSync(`${proc}/${d}/stat`, "utf8"), f = t.slice(t.lastIndexOf(")") + 2).split(" ");
+      if (f[0] === "Z") continue;
+      // utime and stime are in clock ticks, 100 a second on Linux; rss is in 4 KiB pages.
+      rows.push({ pid: +d, ppid: +f[1], pgid: +f[2], rssKb: +f[21] * 4, stat: f[0], cpuMs: (+f[11] + +f[12]) * 10, cmd: "" });
+      const cwd = readlinkSync(`${proc}/${d}/cwd`);
+      if (cwd === meta.wt || cwd.startsWith(meta.wt + "/")) roots.add(+d);
+    } catch {}   // gone meanwhile, or not ours to read
+  }
+  const tree = treeOf(rows, (p) => roots.has(p.pid));
+  return { cpuMs: cpuCounter(`${meta.key}:outside`, tree, true), memMb: tree.reduce((n, p) => n + p.rssKb, 0) / 1024 };
+}
+// The tailer asks every second; reading all of /proc every 5 s is enough.
+const outsideSeen = new Map<string, { at: number; v: { cpuMs: number; memMb: number } }>();
+function outsideCached(meta: TurnMeta) {
+  const c = outsideSeen.get(meta.key);
+  if (c && Date.now() - c.at < 5000) return c.v;
+  const v = process.platform === "linux" ? outside(meta) : { cpuMs: 0, memMb: 0 };
+  outsideSeen.set(meta.key, { at: Date.now(), v });
+  return v;
+}
 
 interface Unit { load: string; active: string; result: string; cpuMs: number; memMb: number }
 async function showUnit(unit: string): Promise<Unit | null> {
@@ -142,8 +186,8 @@ const unitRunning = (u: Unit | null) => !!u && u.load === "loaded" && ["active",
 
 export async function status(meta: TurnMeta): Promise<Status> {
   if (meta.mode === "systemd") {
-    const u = await showUnit(meta.unit!);
-    return { running: unitRunning(u), cpuMs: u?.cpuMs ?? 0, memMb: u?.memMb ?? 0 };
+    const u = await showUnit(meta.unit!), o = outsideCached(meta);
+    return { running: unitRunning(u), cpuMs: (u?.cpuMs ?? 0) + o.cpuMs, memMb: (u?.memMb ?? 0) + o.memMb };
   }
   const { rows } = await groupProcs(meta);
   return { running: rows.length > 0, cpuMs: cpuCounter(meta.key, rows), memMb: rows.reduce((s, p) => s + p.rssKb, 0) / 1024 };
@@ -156,8 +200,14 @@ export async function stopTurn(meta: TurnMeta, reason: "killed" | "timeout" | "s
   if (meta.mode === "systemd") {
     await run(["systemctl", "--user", "stop", meta.unit!], { timeout: 40_000 });
   } else {
+    // The tree is read before anything dies: a descendant whose parent is gone is reparented and can no longer be found.
+    const tree = (await groupProcs(meta)).rows;
     try { process.kill(-meta.pid!, "SIGTERM"); } catch {}
+    for (const p of tree) try { process.kill(p.pid, "SIGTERM"); } catch {}
     for (let i = 0; i < 50 && (await groupProcs(meta)).rows.length; i++) await sleep(200);
+    // Survivors from the first read (reparented ones are not in the tree any more), checked to be the same process.
+    const now = parsePs((await run(["ps", "-axo", "pid=,ppid=,pgid=,rss=,stat=,time=,command="], { timeout: 15_000 })).out);
+    for (const p of tree) if (now.some((q) => q.pid === p.pid && q.cmd === p.cmd)) try { process.kill(p.pid, "SIGKILL"); } catch {}
   }
   await sweep(meta);
 }

@@ -34,7 +34,7 @@ Each agent runs `claude -p` turns in their own git worktrees and pushes the work
   - It stores reports until they are acknowledged.
 - **Agent (`wd agent`):** one per host.
   - It keeps a mirror of each repo and creates a worktree per thread.
-  - It runs each turn as `claude -p --output-format stream-json`, contained in a systemd user unit with memory and time limits on Linux, or in its own process group on macOS.
+  - It runs each turn as `claude -p --output-format stream-json`, contained in a systemd user unit with memory and time limits on Linux, or in its own process tree on macOS.
   - It streams the turn's events to the coordinator, pushes the branch with `--force-with-lease`, and heartbeats its free memory, disk and running turns.
 - **Turns:**
   - A thread is a Claude session. Its first turn runs the prompt; `send` adds follow-up turns that resume the same session on the same host.
