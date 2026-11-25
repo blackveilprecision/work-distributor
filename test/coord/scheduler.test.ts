@@ -99,6 +99,20 @@ describe("placement", () => {
     expect(h.sched.promisedCores("a")).toBe(10.5);
   });
 
+  test("a CPU estimate larger than a host's cores asks for all of them there, not for the impossible", async () => {
+    const h = harness();
+    await ready(h, ["a"], { memAvailMb: 30000, load1: 1.2 });   // 8 cores
+    h.sched.estimate = () => ({ mb: 2048, cores: 15.16 });        // measured on a 16-core host
+    const t1 = submit(h);
+    await h.sched.tick();
+    expect(state(h, t1)).toBe("running");
+    expect(h.db.turn(t1, 1)!.est_cpu).toBe(8);   // promised on this host: its 8 cores
+    const t2 = submit(h);
+    await h.sched.tick();
+    expect(state(h, t2)).toBe("queued");         // 1.2 + 8 promised + 8 > 12
+    expect(h.sched.eligibility("o/app", "a")).toBe("cpu 9.2 of 8 cores busy or promised, needs 8");
+  });
+
   test("placement prefers the host it would run fastest on, then the one with more memory to spare", async () => {
     const h = harness();
     await ready(h, ["a"], { memAvailMb: 30000, cpuScore: 200 });

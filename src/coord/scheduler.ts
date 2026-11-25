@@ -275,13 +275,13 @@ export class Scheduler {
     const repo = this.repo(t.repo);
     if (!repo) { this.finish(t.id, "failed", `repo ${t.repo} is no longer configured`); return "failed"; }
     const epoch = t.epoch + 1, n = t.turns + 1, now = this.now();
-    const h = this.db.host(host), memTotal = h ? (JSON.parse(h.hb) as Heartbeat).probe.memTotalMb : 0;
+    const h = this.db.host(host), probe = h ? (JSON.parse(h.hb) as Heartbeat).probe : null, memTotal = probe?.memTotalMb ?? 0;
     const memMax = Math.round(memTotal ? Math.min(est.mb * 2, memTotal * 0.9) : est.mb * 2);
     const claimed = this.db.tx(() => {
       const r = this.db.run("UPDATE threads SET state='running',host=?,epoch=?,turns=?,reason=NULL,updated=? WHERE id=? AND state=? AND epoch=?", host, epoch, n, now, t.id, back, t.epoch);
       if (r.changes === 0) return false;
       this.db.run("INSERT INTO turns(thread,n,epoch,host,started,est_mb,mem_max,last_activity,est_cpu,cpu_at,cpu_base) VALUES(?,?,?,?,?,?,?,?,?,?,0)",
-        t.id, n, epoch, host, now, est.mb, memMax, now, est.cores, now);
+        t.id, n, epoch, host, now, est.mb, memMax, now, Math.min(est.cores, probe?.cores || Infinity), now);   // promised: what this host can give
       return true;
     });
     if (!claimed) return "skipped";
@@ -418,10 +418,13 @@ export class Scheduler {
     // and turns that have not reached their build yet still hold what they were promised. Contention only slows turns
     // down, so a host may be committed past its cores, up to cpuOversub times them.
     if (!p.cores) return { score: 0, freeMb };
-    const committed = (p.load1 ?? 0) + this.promisedCores(h.name);
-    if (committed + est.cores > p.cores * f.cpuOversub)
-      return `cpu ${committed.toFixed(1)} of ${p.cores} cores busy or promised, needs ${est.cores}`;
-    // How fast it would run: single-core speed times the share of the cores it wants that are free.
+    // A turn cannot use more cores than the host has: an estimate measured on a bigger host asks for all of these,
+    // and runs slower here rather than never.
+    const committed = (p.load1 ?? 0) + this.promisedCores(h.name), cores = Math.min(est.cores, p.cores);
+    if (committed + cores > p.cores * f.cpuOversub)
+      return `cpu ${committed.toFixed(1)} of ${p.cores} cores busy or promised, needs ${cores}`;
+    // How fast it would run: single-core speed times the share of the cores it wants that are free (of the whole
+    // estimate, so a host that can give all of it ranks above one that can give part).
     const share = Math.min(1, Math.max(0.1, (p.cores - committed) / est.cores));
     return { score: (p.cpuScore ?? 1) * share, freeMb };
   }
