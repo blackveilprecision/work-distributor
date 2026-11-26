@@ -84,13 +84,14 @@ describe("run script and environment", () => {
     expect(piArgs(start({ model: "deepseek/deepseek-flash" }))).toEqual(expect.arrayContaining(["--model", "deepseek/deepseek-flash"]));
   });
 
-  test("piArgs billing: api billing passes --api-key only for anthropic models; session billing never does", () => {
+  test("piArgs billing: only api billing passes --api-key, and only for anthropic models; session (the default) never does", () => {
     const anth = { model: "anthropic/claude-sonnet-5-5:high" }, ds = { model: "deepseek/deepseek-flash" };
-    expect(piArgs(start(anth), "sk-ant-1")).toEqual(expect.arrayContaining(["--api-key", "sk-ant-1"]));
-    expect(piArgs(start(ds), "sk-ant-1")).not.toContain("--api-key");
+    expect(piArgs(start({ ...anth, billing: "api" }), "sk-ant-1")).toEqual(expect.arrayContaining(["--api-key", "sk-ant-1"]));
+    expect(piArgs(start({ ...ds, billing: "api" }), "sk-ant-1")).not.toContain("--api-key");
+    expect(piArgs(start(anth), "sk-ant-1")).not.toContain("--api-key");   // no billing: session
     expect(piArgs(start({ ...anth, billing: "session" }), "sk-ant-1")).not.toContain("--api-key");
-    expect(piArgs(start({ billing: "session" }), "sk-ant-1")).not.toContain("--api-key");
-    expect(() => piArgs(start(anth))).toThrow("ANTHROPIC_API_KEY");
+    expect(() => piArgs(start({ ...anth, billing: "api" }))).toThrow("ANTHROPIC_API_KEY");
+    expect(() => piArgs(start(anth))).not.toThrow();
   });
 
   test("sessionEnv drops API keys and keeps everything else", () => {

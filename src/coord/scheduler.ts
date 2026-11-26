@@ -79,7 +79,7 @@ export class Scheduler {
       `INSERT INTO threads(id,caller,repo,ref,branch,tag,prompt,model,runner,billing,requires,size,priority,ttl_hours,state,session_id,created,updated)
        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?,?)`,
       id, r.caller, r.repo, r.ref ?? repo.defaultRef, r.branch ?? `wd/${id}`, r.tag ?? null, r.prompt, r.model ?? null,
-      r.runner ?? null, r.billing ?? "api", JSON.stringify(r.requires ?? []), r.size ?? null, pr, r.ttlHours ?? 24, crypto.randomUUID(), t, t);
+      r.runner ?? null, r.billing ?? "session", JSON.stringify(r.requires ?? []), r.size ?? null, pr, r.ttlHours ?? 24, crypto.randomUUID(), t, t);
     const ahead = this.db.get<{ c: number }>(
       "SELECT COUNT(*) c FROM threads WHERE state='queued' AND (priority>? OR (priority=? AND created<=?))", pr, pr, t)!.c;
     return { id, position: ahead };
@@ -295,7 +295,8 @@ export class Scheduler {
       thread: t.id, epoch, turn: n, repoUrl: repo.url, repoId: t.repo, ref: t.ref, branch: t.branch,
       sessionId: t.session_id, resume: t.turns > 0, prompt, model: t.model ?? undefined,
       runner: t.runner === "pi" ? "pi" : undefined,
-      billing: t.billing === "session" ? "session" : undefined,
+      // Always sent: an agent before 0.4.11 takes a missing billing for api.
+      billing: t.billing === "api" ? "api" : "session",
       memoryMaxMb: memMax, runtimeMaxSec: this.cfg.runtimeMaxSec, rust: repo.rust,
     };
     const mine = () => { const c = this.db.thread(t.id); return !!c && c.state === "running" && c.epoch === epoch; };

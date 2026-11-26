@@ -137,6 +137,17 @@ describe("placement", () => {
     void t1;
   });
 
+  test("billing is session unless a thread asks for api, and the start always says which", async () => {
+    const h = harness();
+    await ready(h, ["a"], { memAvailMb: 60000 });
+    const plain = submit(h), api = submit(h, { billing: "api" });
+    await h.sched.tick();
+    expect(h.db.thread(plain)!.billing).toBe("session");
+    const sent = (id: string) => h.agent.started.find((s) => s.b.thread === id)!.b.billing;
+    expect(sent(plain)).toBe("session");   // explicit: an agent before 0.4.11 reads a missing billing as api
+    expect(sent(api)).toBe("api");
+  });
+
   test("placement prefers the host it would run fastest on, then the one with more memory to spare", async () => {
     const h = harness();
     await ready(h, ["a"], { memAvailMb: 30000, cpuScore: 200 });

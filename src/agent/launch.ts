@@ -45,16 +45,17 @@ export function claudeArgs(s: StartTurn): string[] {
 
 // pi reads the same stdin prompt and writes its own JSONL event stream to stdout. One --session-id flag covers both
 // the first turn (creates it) and follow-ups (reopens it), and --approve trusts the worktree's project files.
-// Billing: an anthropic model paid by API credits gets --api-key (it beats pi's stored session); everything else
-// (session billing, or any other provider) uses pi's own auth store.
+// Billing: an anthropic model on api billing gets --api-key (it beats pi's stored session); everything else
+// (session billing, the default, or any other provider) uses pi's own auth store.
 export function piArgs(s: StartTurn, apiKey?: string): string[] {
   const anthropicModel = typeof s.model === "string" && s.model.startsWith("anthropic/");
-  const byKey = s.billing !== "session" && anthropicModel;
+  const byKey = s.billing === "api" && anthropicModel;
   if (byKey && !apiKey) throw new Error("api billing needs ANTHROPIC_API_KEY in the agent's envFile");
   return ["-p", "--mode", "json", "--approve", "--no-mcp", ...(byKey ? ["--api-key", apiKey!] : []), "--session-id", s.sessionId, ...(s.model ? ["--model", s.model] : [])];
 }
 
-// Session billing means the runner's stored subscription login pays: no API keys from the envFile reach the turn.
+// Session billing (the default) means the runner's stored subscription login pays: no API keys from the envFile reach
+// the turn. Only a thread submitted with billing "api" gets them.
 export const sessionEnv = (env: Record<string, string>) => Object.fromEntries(Object.entries(env).filter(([k]) => !k.endsWith("_API_KEY")));
 
 // Every word is quoted here and the file is started by path, because systemd rewrites ${NAME} and $$ in a unit's own
@@ -95,7 +96,7 @@ export async function launch(cfg: AgentConfig, s: StartTurn, wt: string, target:
   const meta: TurnMeta = { s, key, dir, wt, mode, pid: null, unit: mode === "systemd" ? `wd-${key}` : null, startedAt: Date.now(), target };
   const bin = s.runner === "pi" ? cfg.pi : cfg.claude;
   if (!bin) throw new Error(`a ${s.runner ?? "claude"} turn needs the agent's ${s.runner === "pi" ? "pi" : "claude"} binary in agent.json`);
-  const envFile = envFromFile(cfg.envFile), extra = s.billing === "session" ? sessionEnv(envFile) : envFile;
+  const envFile = envFromFile(cfg.envFile), extra = s.billing === "api" ? envFile : sessionEnv(envFile);
   const args = s.runner === "pi" ? piArgs(s, envFile.ANTHROPIC_API_KEY) : claudeArgs(s);
   writeFileSync(join(dir, "prompt.txt"), s.prompt);
   writeFileSync(join(dir, "run.sh"), runScript(dir, bin, args, turnEnv(s, wt, { target, sccache, path: cfg.path, extra })));

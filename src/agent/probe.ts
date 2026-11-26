@@ -11,6 +11,8 @@ let login: Login | null = null, gen = 0;
 // only reused for the claude it checked (several agents share this module in tests).
 export const resetLoginCache = () => { login = null; gen++; };
 
+const noKeys = (env: Record<string, string>) => Object.fromEntries(Object.entries(env).filter(([k]) => !k.endsWith("_API_KEY")));
+
 interface Pi { at: number; ok: boolean; error: string | null; version: string | null }
 let pi: Pi | null = null, piGen = 0;
 export const resetPiCache = () => { pi = null; piGen++; };
@@ -40,10 +42,10 @@ export async function loginCheck(cfg: AgentConfig): Promise<Login> {
   if (login && login.claude === cfg.claude && Date.now() - login.at < (login.ok ? 3_600_000 : 120_000)) return login;
   const user = process.env.USER ?? userInfo().username, mine = gen;
   // The same fixed environment a turn gets (env -i): a login that only works from the agent's own env is no login.
-  // The agent's envFile joins it on both sides, so an API key there counts for the probe and the turns alike.
+  // Without the envFile's API keys, as a session-billed (default) turn runs: this checks the subscription login itself.
   const r = await run([cfg.claude, "-p", "ok", "--model", "haiku", "--output-format", "json", "--max-turns", "1"], {
     cwd: cfg.dataDir, timeout: 120_000,
-    env: { ...envFromFile(cfg.envFile), HOME: process.env.HOME ?? userInfo().homedir, USER: user, LOGNAME: user, PATH: process.env.PATH },
+    env: { ...noKeys(envFromFile(cfg.envFile)), HOME: process.env.HOME ?? userInfo().homedir, USER: user, LOGNAME: user, PATH: process.env.PATH },
   });
   let res: any = null;
   try { const j = JSON.parse(r.out); res = Array.isArray(j) ? j.findLast((e) => e?.type === "result") : j; } catch {}

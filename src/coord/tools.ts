@@ -8,7 +8,7 @@ const tool = (name: string, description: string, props: Record<string, unknown> 
   ({ name, description, inputSchema: { type: "object" as const, properties: props, required } });
 
 export const TOOLS = [
-  tool("wd_submit", "Queue a thread on some host: a Claude Code session, or a pi session when runner is \"pi\" (models like \"deepseek/deepseek-flash\" or \"anthropic/claude-sonnet-5-5:high\"). billing: api (default, the host's envFile keys) or session (the stored subscription login). Returns {id, position} at once; the report arrives on its own when it ends.", {
+  tool("wd_submit", "Queue a thread on some host: a Claude Code session, or a pi session when runner is \"pi\" (models like \"deepseek/deepseek-flash\" or \"anthropic/claude-sonnet-5-5:high\"). billing: session (default, the stored subscription login) or api (the host's envFile keys). Returns {id, position} at once; the report arrives on its own when it ends.", {
     repo: str, prompt: str, ref: str, model: str, branch: str, tag: str, requires: { type: "array", items: str },
     runner: { enum: ["claude", "pi"] }, billing: { enum: ["api", "session"] }, size: { enum: ["small", "heavy"] }, priority: { type: "boolean" }, ttlHours: { type: "number" },
   }, ["repo", "prompt"]),

@@ -15,7 +15,7 @@ export interface SubmitRequest {
   prompt: string;
   model?: string;            // passed to the runner's --model
   runner?: "claude" | "pi";  // which agent runs the thread; default claude. pi models are "provider/id[:thinking]"
-  billing?: "api" | "session";  // who pays for the turn; default api (the envFile's keys). session: the runner's stored subscription login
+  billing?: "api" | "session";  // who pays for the turn; default session (the runner's stored subscription login). api: the envFile's keys
   requires?: string[];       // host labels that must all be present; every host also has its own name as a label
   size?: "small" | "heavy";  // only a hint until p90 estimates exist
   priority?: boolean;
@@ -51,7 +51,8 @@ export interface HostView {
   load1: number;               // 1-minute load average: every process on the host, wd's or not
   cpuScore: number | null;     // single-core benchmark, the best seen (agent/probe.ts): relative host speed
   cpuPromisedCores: number;    // CPU promised to running turns and not in use yet
-  running: number; maxThreads: number | null;   // null: no cap, memory and CPU decide claudeVersion: string | null; loginExpiresAt: number | null; lastSeenAt: number | null;
+  running: number; maxThreads: number | null;   // null: no cap, memory and CPU decide
+  claudeVersion: string | null; loginExpiresAt: number | null; lastSeenAt: number | null;
   piVersion: string | null; piOk: boolean; piError: string | null;   // the pi runner's readiness (nulls before 0.4.8)
   doctorFailed: string[];      // repos whose doctor fails here: none of their threads go to this host
   why?: string | null;         // GET /hosts?repo=: why a thread of that repo cannot start here now; null when it can
@@ -87,7 +88,7 @@ export interface StartTurn {
   sessionId: string; resume: boolean;   // claude turn 1: --session-id, later turns: --resume; pi: --session-id every turn
   prompt: string; model?: string;
   runner?: "claude" | "pi";            // absent = claude; pi runs the agent's `pi` binary instead of `claude`
-  billing?: "api" | "session";         // absent = api: the envFile's keys bill the turn; session drops *_API_KEY and uses the stored login
+  billing?: "api" | "session";         // session drops *_API_KEY and uses the stored login; api: the envFile's keys bill the turn (absent: session; agents before 0.4.11 read absent as api)
   memoryMaxMb: number; runtimeMaxSec: number;
   rust: boolean;                        // lease a target dir + sccache
 }

@@ -102,7 +102,7 @@ const submit = defineCommand({
     branch: { type: "string", valueHint: "name", description: "Work branch to create and push (default: wd/<thread id>)" },
     model: { type: "string", valueHint: "model", description: "Passed to the runner's --model, e.g. sonnet, opus, haiku (claude) or deepseek/deepseek-flash (pi)" },
     runner: { type: "enum", options: ["claude", "pi"], description: "Which agent runs the thread (default: claude); pi models are provider/id[:thinking]" },
-    billing: { type: "enum", options: ["api", "session"], description: "Who pays: api (default) uses the agent envFile's keys; session drops API keys and bills the runner's stored subscription login" },
+    billing: { type: "enum", options: ["api", "session"], description: "Who pays: session (default) drops API keys and bills the runner's stored subscription login; api uses the agent envFile's keys" },
     require: { type: "string", valueHint: "label", description: "Host label the thread needs; repeat for several" },
     size: { type: "enum", options: ["small", "heavy"], description: "Memory hint: small (2 GB) or heavy (8 GB); a floor under the repo's measured estimate" },
     priority: { type: "boolean", description: "Place before threads without it" },
