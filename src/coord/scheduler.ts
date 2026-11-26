@@ -46,7 +46,8 @@ export function httpAgent(hostCfg: (name: string) => HostCfg | undefined): Agent
 const DAY = 86_400_000;
 const DEFAULT_MB = { small: 2048, heavy: 8192 };
 const DEFAULT_CORES = { small: 0.5, heavy: 2 };
-const CPU_WINDOW_MS = 60_000;   // a turn's CPU rate is measured over windows this long, so a one-minute build burst counts
+const CPU_WINDOW_MS = 60_000;
+const CPU_PROMISE_MS = 10 * 60_000;   // how long a new turn is promised the CPU it has not used yet   // a turn's CPU rate is measured over windows this long, so a one-minute build burst counts
 const p90 = (v: number[]) => (v.sort((a, b) => a - b), v.length ? v[Math.ceil(0.9 * v.length) - 1] : 0);
 export type Est = { mb: number; cores: number };
 type Fit = { score: number; freeMb: number };
@@ -256,12 +257,14 @@ export class Scheduler {
 
   // The size hint is a floor: light turns of a repo must not shrink a heavy thread's estimate, and with it its memory cap
   // (2x the estimate), to a few hundred MB.
-  // p90 of the repo's last 20 turns, never below the size hint: light turns cannot shrink a heavy thread's estimate.
+  // p90 of the last 20 turns of the repo's threads of the same size, never below the size hint. Sizes keep their own
+  // history: a read-only review (small) is not sized like the builds (heavy) of the same repo, and light turns
+  // cannot shrink a heavy thread's estimate.
   estimate(t: Pick<ThreadRow, "repo" | "size">): Est {
+    const size = t.size === "heavy" ? "heavy" : "small";
     const rows = this.db.all<{ mem_peak: number; cpu_peak: number }>(
       `SELECT u.mem_peak, u.cpu_peak FROM turns u JOIN threads x ON x.id=u.thread
-       WHERE x.repo=? AND u.ended IS NOT NULL AND u.mem_peak>0 ORDER BY u.started DESC LIMIT 20`, t.repo);
-    const size = t.size === "heavy" ? "heavy" : "small";
+       WHERE x.repo=? AND COALESCE(x.size,'small')=? AND u.ended IS NOT NULL AND u.mem_peak>0 ORDER BY u.started DESC LIMIT 20`, t.repo, size);
     return {
       mb: Math.max(p90(rows.map((r) => r.mem_peak)), DEFAULT_MB[size]),
       cores: Math.round(Math.max(p90(rows.filter((r) => r.cpu_peak > 0).map((r) => r.cpu_peak)), DEFAULT_CORES[size]) * 100) / 100,
@@ -372,9 +375,13 @@ export class Scheduler {
   // An optional cap; without one, memory and CPU decide how many turns a host runs.
   maxThreads(h: HostRow): number | null { return (JSON.parse(h.hb) as Heartbeat).maxThreads ?? this.hostCfg(h.name)?.maxThreads ?? null; }
 
-  // CPU (cores) promised to running turns and not in use yet: the estimate less the last measured rate.
+  // CPU (cores) promised to running turns and not in use yet: the estimate less the last measured rate, for a turn's
+  // first CPU_PROMISE_MS only. That covers turns placed together before their builds show in the load average; after
+  // it the load average shows what a turn really uses. A turn that mostly waits holding its busiest minute for hours
+  // would keep a host to one thread. Contention only slows turns, so this is not done for memory.
   promisedCores(host: string): number {
-    return this.db.get<{ s: number | null }>("SELECT SUM(MAX(est_cpu-cpu_rate,0)) s FROM turns WHERE host=? AND ended IS NULL", host)!.s ?? 0;
+    return this.db.get<{ s: number | null }>("SELECT SUM(MAX(est_cpu-cpu_rate,0)) s FROM turns WHERE host=? AND ended IS NULL AND started>?",
+      host, this.now() - CPU_PROMISE_MS)!.s ?? 0;
   }
 
   private doctors() {

@@ -113,6 +113,30 @@ describe("placement", () => {
     expect(h.sched.eligibility("o/app", "a")).toBe("cpu 9.2 of 8 cores busy or promised, needs 8");
   });
 
+  test("estimates keep each size's own history: a small review is not sized like the repo's heavy builds", async () => {
+    const h = harness();
+    await ready(h, ["a"], { memAvailMb: 60000 });
+    const b = submit(h, { size: "heavy" });
+    await h.sched.tick();
+    h.sched.onTurnEnd(turnEnd("a", b, 1, 1, { memPeakMb: 12000 }));
+    expect(h.sched.estimate({ repo: "o/app", size: "heavy" }).mb).toBe(12000);
+    expect(h.sched.estimate({ repo: "o/app", size: "small" }).mb).toBe(2048);
+    expect(h.sched.estimate({ repo: "o/app", size: null }).mb).toBe(2048);   // no size is small
+  });
+
+  test("a turn is promised the CPU it has not used for its first 10 minutes only", async () => {
+    const h = harness();
+    await ready(h, ["a"], { memAvailMb: 60000 });
+    const t1 = submit(h, { size: "heavy" });
+    await h.sched.tick();
+    expect(h.sched.promisedCores("a")).toBe(2);
+    h.advance(9 * 60_000);
+    expect(h.sched.promisedCores("a")).toBe(2);
+    h.advance(2 * 60_000);
+    expect(h.sched.promisedCores("a")).toBe(0);   // from here the load average shows what it uses
+    void t1;
+  });
+
   test("placement prefers the host it would run fastest on, then the one with more memory to spare", async () => {
     const h = harness();
     await ready(h, ["a"], { memAvailMb: 30000, cpuScore: 200 });
