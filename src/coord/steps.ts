@@ -29,6 +29,21 @@ export function summarize(raw: string): string[] {
   });
   if (e.type === "result") return [one(`done${e.is_error ? " (error)" : ""}: ${e.result ?? ""}`)];
   if (e.type === "system" && e.subtype === "init") return ["session started"];
+  // pi events: a tool call starting (args arrive separately, so the name only), a tool finishing with its result,
+  // the final message of a step, and the turn's final message.
+  if (e.type === "toolcall_start") return [`${typeof e.toolName === "string" ? e.toolName : "tool"}: …`];
+  if (e.type === "tool_execution_end") {
+    const t = Array.isArray(e.result?.content) ? e.result.content.map((x: any) => x?.text ?? "").join(" ") : "";
+    return [one(`↳ ${e.isError ? "error: " : ""}${t || "(no output)"}`, 120)];
+  }
+  if (e.type === "message_end" && e.message?.role === "assistant")
+    return content.flatMap((c: any) => (typeof c?.text === "string" && c.text.trim() ? [one(c.text)] : []));
+  if (e.type === "turn_end") {
+    const text = content.map((c: any) => (typeof c?.text === "string" ? c.text : "")).join(" ").trim();
+    const stop = e.message?.stopReason;
+    const bad = stop && !["stop", "toolUse", "endTurn"].includes(stop) ? ` (${stop})` : "";
+    return [one(`done${bad}: ${text}`)];
+  }
   return [];
 }
 

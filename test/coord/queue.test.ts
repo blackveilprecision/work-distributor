@@ -42,7 +42,7 @@ describe("GET /queue", () => {
 
   test("a usage-limit hold and an empty fleet are the reason", () => {
     const h = harness();
-    const id = submit(h);
+    const id = submit(h, { billing: "session" });
     expect(queue(h).queued[0].waiting).toBe("no host has reported");
     h.db.setMeta("hold_until", String(h.clock.t + 60_000));
     const q = queue(h);

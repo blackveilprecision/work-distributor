@@ -24,8 +24,12 @@ export function readLines(file: string, offset: number, final: boolean): { lines
   try { fd = openSync(file, "r"); } catch { return { lines, next: offset }; }
   const make = (at: number, buf: Buffer): Line => {
     // Real claude does not put "type" first, so the line is parsed; result lines are small, giant lines are tool output.
+    // A pi run's outcome lives in its last "turn_end" event (final message, usage, stop reason).
     let isResult = false;
-    if (buf.length < 1_000_000 && buf.includes('"type":"result"')) try { isResult = JSON.parse(buf.toString()).type === "result"; } catch {}
+    if (buf.length < 1_000_000) {
+      const t = buf.includes('"type":"result"') ? "result" : buf.includes('"type":"turn_end"') ? "turn_end" : null;
+      if (t) try { isResult = JSON.parse(buf.toString()).type === t; } catch {}
+    }
     // 4 bytes per char is the most a UTF-8 char takes, so decoding KEEP*4 bytes always covers KEEP chars.
     return { at, text: buf.subarray(0, KEEP * 4).toString().slice(0, KEEP), ...(isResult ? { result: buf.toString() } : {}) };
   };
@@ -81,6 +85,15 @@ async function sendLines(ctx: Ctx, a: Active, lines: Line[], next: number, offse
 function parseResult(raw: string): TurnEnd["result"] {
   try {
     const j = JSON.parse(raw);
+    if (j.type === "turn_end") {   // pi: the final message of a turn; failures usually exit non-zero instead
+      const m = j.message ?? {}, content = Array.isArray(m.content) ? m.content : [];
+      const text = content.map((c: any) => (typeof c?.text === "string" ? c.text : "")).join("\n").trim();
+      const stop = typeof m.stopReason === "string" ? m.stopReason : null;
+      return {
+        isError: stop !== null && !["stop", "toolUse", "endTurn"].includes(stop),
+        text: text || null, totalCostUsd: Number(m.usage?.cost?.total) || 0, durationMs: Number(m.durationMs) || 0,
+      };
+    }
     return { isError: j.is_error === true, text: typeof j.result === "string" ? j.result : null, totalCostUsd: Number(j.total_cost_usd) || 0, durationMs: Number(j.duration_ms) || 0 };
   } catch { return null; }
 }

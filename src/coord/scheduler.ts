@@ -76,10 +76,10 @@ export class Scheduler {
     if (!repo) throw new HttpError(400, `unknown repo ${r.repo}`);
     const id = crypto.randomUUID().slice(0, 8), t = this.now(), pr = r.priority ? 1 : 0;
     this.db.run(
-      `INSERT INTO threads(id,caller,repo,ref,branch,tag,prompt,model,requires,size,priority,ttl_hours,state,session_id,created,updated)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?,?)`,
+      `INSERT INTO threads(id,caller,repo,ref,branch,tag,prompt,model,runner,billing,requires,size,priority,ttl_hours,state,session_id,created,updated)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?,?)`,
       id, r.caller, r.repo, r.ref ?? repo.defaultRef, r.branch ?? `wd/${id}`, r.tag ?? null, r.prompt, r.model ?? null,
-      JSON.stringify(r.requires ?? []), r.size ?? null, pr, r.ttlHours ?? 24, crypto.randomUUID(), t, t);
+      r.runner ?? null, r.billing ?? "api", JSON.stringify(r.requires ?? []), r.size ?? null, pr, r.ttlHours ?? 24, crypto.randomUUID(), t, t);
     const ahead = this.db.get<{ c: number }>(
       "SELECT COUNT(*) c FROM threads WHERE state='queued' AND (priority>? OR (priority=? AND created<=?))", pr, pr, t)!.c;
     return { id, position: ahead };
@@ -125,7 +125,7 @@ export class Scheduler {
 
   onHeartbeat(hb: Heartbeat): HeartbeatReply {
     const now = this.now(), prev = this.db.host(hb.host), p = hb.probe;
-    const reason = p.problems.length ? p.problems.join("; ") : !p.loginOk ? (p.loginError ?? "not logged in") : null;
+    const reason = p.problems.length ? p.problems.join("; ") : (!p.loginOk && !p.piOk) ? [p.loginError, p.piError].filter(Boolean).join("; ") || "no working runner" : null;
     const state = reason ? "refused" : "ok";
     this.db.run("INSERT OR REPLACE INTO hosts(name,hb,seen,state,reason,since) VALUES(?,?,?,?,?,?)",
       hb.host, JSON.stringify(hb), now, state, reason, prev?.state === state ? prev.since : now);
@@ -175,13 +175,16 @@ export class Scheduler {
     try {
       const ev = JSON.parse(line), info = ev.rate_limit_info ?? ev;
       if (ev.type !== "rate_limit_event" || info.status !== "rejected") return;
+      // Only the subscription has weekly limits, so only session-billed threads (or legacy ones) can hold starts;
+      // api-billed threads pay per token and never arm it.
+      if (t.billing === "api") return;
       let at = Number(info.resetsAt ?? info.resets_at ?? 0);
       if (!at) at = this.now() + 300_000;
       else if (at < 1e12) at *= 1000;
       if (at <= Number(this.db.meta("hold_until") ?? 0)) return;
       this.db.setMeta("hold_until", String(at));
       this.db.setThread(t.id, { reason: `rate-limit hold until ${new Date(at).toISOString()}` });
-      this.reports.add(t.id, "turn", { reason: `rate-limit: new starts held until ${new Date(at).toISOString()}` });
+      this.reports.add(t.id, "turn", { reason: `rate-limit: session-billed starts held until ${new Date(at).toISOString()}` });
     } catch { /* a truncated line is not worth a crash */ }
   }
 
@@ -291,6 +294,8 @@ export class Scheduler {
     const body: StartTurn = {
       thread: t.id, epoch, turn: n, repoUrl: repo.url, repoId: t.repo, ref: t.ref, branch: t.branch,
       sessionId: t.session_id, resume: t.turns > 0, prompt, model: t.model ?? undefined,
+      runner: t.runner === "pi" ? "pi" : undefined,
+      billing: t.billing === "session" ? "session" : undefined,
       memoryMaxMb: memMax, runtimeMaxSec: this.cfg.runtimeMaxSec, rust: repo.rust,
     };
     const mine = () => { const c = this.db.thread(t.id); return !!c && c.state === "running" && c.epoch === epoch; };
@@ -364,7 +369,8 @@ export class Scheduler {
       if (!h || h.state === "lost") { this.finish(t.id, "lost", "host lost before the follow-up could start"); continue; }
       // A follow-up must run where its worktree is, but it waits there for room like a new thread would.
       const est = this.estimate(t);
-      if (this.now() < Number(this.db.meta("hold_until") ?? 0) || typeof this.fit(t, est, h) === "string") continue;
+      if ((t.billing ?? "session") !== "api" && this.now() < Number(this.db.meta("hold_until") ?? 0)) continue;
+      if (typeof this.fit(t, est, h) === "string") continue;
       const sends = this.db.all<{ id: number; text: string }>("SELECT id,text FROM sends WHERE thread=? ORDER BY id", thread);
       if (!sends.length) continue;
       const r = await this.launch(t, h.name, sends.map((s) => s.text).join("\n\n"), est, "idle");
@@ -403,10 +409,13 @@ export class Scheduler {
 
   // The memory host h would have left after starting thread t, or why it cannot start it now.
   // A reason string when the thread cannot start there now, else how well it would run there.
-  private fit(t: Pick<ThreadRow, "repo" | "requires">, est: Est, h: HostRow): Fit | string {
+  private fit(t: Pick<ThreadRow, "repo" | "requires" | "runner">, est: Est, h: HostRow): Fit | string {
     if (h.state !== "ok") return h.reason ? `${h.state}: ${h.reason}` : h.state;
     const repo = this.repo(t.repo), need: string[] = [...JSON.parse(t.requires), ...(repo?.requires ?? [])];   // no repo: launch fails the thread
     const hb = JSON.parse(h.hb) as Heartbeat, p = hb.probe, labels = [h.name, ...(hb.labels ?? this.hostCfg(h.name)?.labels ?? [])], f = this.cfg.floors;   // a host's name is a label, so requires can pin a host
+    // A thread runs only on a host whose runner is ready: a pi thread needs pi, everything else needs the claude login.
+    if ((t.runner ?? "claude") === "pi") { if (!p.piOk) return p.piError ?? "pi not ready"; }
+    else if (!p.loginOk) return p.loginError ?? "claude not logged in";
     const missing = need.filter((l) => !labels.includes(l));
     if (missing.length) return `lacks label ${missing.join(",")}`;
     const doc = repo?.doctor ? this.db.get<{ ok: number; output: string }>("SELECT ok,output FROM doctor WHERE host=? AND repo=?", h.name, t.repo) : null;
@@ -451,9 +460,10 @@ export class Scheduler {
 
 
   private async place() {
-    if (this.now() < Number(this.db.meta("hold_until") ?? 0)) return;
+    const hold = Number(this.db.meta("hold_until") ?? 0), held = this.now() < hold;
     // A thread that fits nowhere is skipped, not blocking, so small work still flows past a heavy one.
     for (const t of this.db.all<ThreadRow>("SELECT * FROM threads WHERE state='queued' ORDER BY priority DESC, created, rowid")) {
+      if (held && t.billing !== "api") continue;   // the subscription's weekly limit holds only session-billed starts
       const est = this.estimate(t), host = this.pick(t, est);
       if (host) await this.launch(t, host, t.prompt, est, "queued");
     }
@@ -478,7 +488,8 @@ export class Scheduler {
     const entry = (t: ThreadRow, since: number, waiting: string | null) => ({ id: t.id, caller: t.caller, repo: t.repo, tag: t.tag, host: t.host, since, waiting });
     const queued = this.db.all<ThreadRow>("SELECT * FROM threads WHERE state='queued' ORDER BY priority DESC, created, rowid").map((t) => {
       const est = this.estimate(t), fits = rows.map((h) => [h.name, this.fit(t, est, h)] as const);
-      const waiting = held ?? (!rows.length ? "no host has reported"
+      const heldHere = t.billing !== "api" ? held : null;   // api-billed threads never wait on the subscription's hold
+      const waiting = heldHere ?? (!rows.length ? "no host has reported"
         : fits.some(([, f]) => typeof f !== "string") ? null : fits.map(([n, f]) => `${n}: ${f}`).join("; "));
       return { ...entry(t, t.created, waiting), priority: !!t.priority, estimateMb: est.mb, estimateCores: est.cores, prompt: t.prompt.slice(0, 500) };
     });
@@ -506,7 +517,7 @@ export class Scheduler {
 
   // Why a new thread of this repo could not start on that host now; null when it could.
   eligibility(repo: string, host: string): string | null {
-    const h = this.db.host(host), t = { repo, requires: "[]", size: null };
+    const h = this.db.host(host), t = { repo, requires: "[]", size: null, runner: "claude" as const };
     if (!h) return "never seen";
     const f = this.fit(t, this.estimate(t), h);
     return typeof f === "string" ? f : null;

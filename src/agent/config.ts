@@ -7,6 +7,9 @@ export interface AgentConfig {
   labels: string[]; gitTokenFile?: string; maxThreads?: number; targetDirPool: number;   // maxThreads: an optional cap; memory and CPU decide without it
   autoUpdate?: boolean;   // false: keep this binary even when the coordinator runs a newer release
   path?: string;   // PATH for doctors and turns; without it, the host's interactive login shell's PATH (see loginPath)
+  envFile?: string;   // KEY=value lines added to the login check and every turn's environment (e.g. ANTHROPIC_API_KEY); keep it mode 600
+  pi?: string;        // the pi coding agent for threads submitted with --runner pi
+  piProbe?: { model?: string };   // model for the pi readiness check, e.g. "deepseek/deepseek-flash"; without it pi's default model is used
   heartbeatSec: number; tailMs: number; pushEverySec: number;   // tuning knobs, tests shorten them
 }
 
@@ -24,7 +27,26 @@ export function loadConfig(path?: string): AgentConfig {
   cfg.dataDir = expand(cfg.dataDir);
   if (cfg.claude.includes("/")) cfg.claude = expand(cfg.claude);
   if (cfg.gitTokenFile) cfg.gitTokenFile = expand(cfg.gitTokenFile);
+  if (cfg.envFile) cfg.envFile = expand(cfg.envFile);
+  if (cfg.pi && cfg.pi.includes("/")) cfg.pi = expand(cfg.pi);
   return cfg;
+}
+
+// KEY=value (or `export KEY=value`) per line, for the login check and every turn's environment. Blank lines and
+// # comments are skipped; values are literal (no quotes or $ expansion). Keep the file mode 600.
+export function envFromFile(path?: string): Record<string, string> {
+  if (!path || !existsSync(path)) return {};
+  const out: Record<string, string> = {};
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    const t = line.trim().replace(/^export\s+/, "");
+    if (!t || t.startsWith("#")) continue;
+    const i = t.indexOf("=");
+    if (i <= 0) continue;
+    const k = t.slice(0, i).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) continue;   // a line that cannot name a shell variable is a mistake, not a key
+    out[k] = t.slice(i + 1).trim();
+  }
+  return out;
 }
 
 export interface Ran { ok: boolean; out: string; err: string; code: number | null }

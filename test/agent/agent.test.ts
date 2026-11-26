@@ -379,7 +379,7 @@ describe("release, doctor, probe", () => {
     expect(existsSync(join(h.cfg.dataDir, "doctor/acme__app"))).toBe(false);
   });
 
-  test("probe reports the host, the version and a working login; a missing login refuses the host", async () => {
+  test("probe reports the host, the version and a working login; a missing login marks the runner, not the host", async () => {
     const { resetLoginCache } = await import("../../src/agent/probe");
     resetLoginCache();
     const p = (await h.call("/probe")).body;
@@ -397,7 +397,8 @@ describe("release, doctor, probe", () => {
     try {
       const q = (await h.call("/probe")).body;
       expect(q.loginOk).toBe(false);
-      expect(q.problems.join()).toContain("Not logged in");
+      expect(q.loginError).toContain("Not logged in");
+      expect(q.problems).toEqual([]);   // a host without claude can still serve pi threads
     } finally { process.env.HOME = home; resetLoginCache(); }
   });
 });

@@ -186,6 +186,13 @@ Hosts and repos can be listed in `coord.json` or registered through the caller A
 | `maxThreads` | none | optional cap on concurrent turns; without it memory and CPU decide |
 | `dataDir` | `~/.wd` | mirrors, worktrees, turns, target dirs |
 | `gitTokenFile` | | GitHub token used for pushes |
+| `envFile` | | KEY=value lines added to the login check and every turn's environment (e.g. `ANTHROPIC_API_KEY` to bill workers to API credits instead of a subscription session); keep it mode 600 |
+| `pi` | | the pi coding agent, for threads submitted with `--runner pi` |
+| `piProbe.model` | | model for the pi readiness check, e.g. `deepseek/deepseek-flash` (pi reads its own `~/.pi/agent/auth.json`, so no key goes in the turn environment) |
+
+A thread submitted with `--runner pi` (CLI or MCP) runs as `pi -p --mode json --approve --no-mcp --session-id <id>` with the same worktree, prompt-file and env-file plumbing as a claude thread; its model is pi's `provider/id[:thinking]` form (e.g. `deepseek/deepseek-flash` or `anthropic/claude-sonnet-5-5:high`). The outcome of a pi turn is its last `turn_end` event (final message, usage, stop reason). A host serves a pi thread only when its pi probe passes, and a claude thread only when the claude login works — the host itself is refused only when neither runner is ready.
+
+`--billing session` bills a thread to the runner's stored subscription login: for claude it drops every `*_API_KEY` from the turn environment (so the stored OAuth credential pays), for pi on an `anthropic/*` model it omits `--api-key` (pi's own auth store pays). The default is `api`: the envFile's keys bill the turn, and a pi `anthropic/*` model gets `--api-key` from the envFile's `ANTHROPIC_API_KEY`. The usage-limit hold only ever blocks session-billed starts: an api-billed thread never arms it and never waits on it.
 | `path` | the login shell's PATH | PATH for doctors and turns |
 | `targetDirPool` | 4 | Rust target dirs per repo |
 | `autoUpdate` | true | update to the coordinator's release (see below) |

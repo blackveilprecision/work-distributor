@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, writeFi
 import { join } from "node:path";
 import { userInfo } from "node:os";
 import type { StartTurn, TurnEnd } from "../shared/types";
-import { type AgentConfig, run, sleep } from "./config";
+import { type AgentConfig, envFromFile, run, sleep } from "./config";
 
 export interface TurnMeta {
   s: StartTurn; key: string; dir: string; wt: string; mode: "systemd" | "pgroup";
@@ -21,9 +21,10 @@ const read = (file: string) => (existsSync(file) ? readFileSync(file, "utf8").tr
 // What the session may see. No GH_TOKEN, GITHUB_TOKEN or SSH_AUTH_SOCK in its environment, and the agent does the
 // pushing. That is hygiene, not isolation: the worker runs as the same user, so it can still read whatever that user can
 // (gitTokenFile, the host token in ~/.config/wd/agent.json, ~/.ssh). Real isolation needs a separate user for the worker.
-export function turnEnv(s: StartTurn, wt: string, o: { target?: string | null; sccache?: string | null; path?: string } = {}): Record<string, string> {
+export function turnEnv(s: StartTurn, wt: string, o: { target?: string | null; sccache?: string | null; path?: string; extra?: Record<string, string> } = {}): Record<string, string> {
   const home = process.env.HOME ?? userInfo().homedir, user = process.env.USER ?? userInfo().username;
   return {
+    ...(o.extra ?? {}),   // the agent's envFile (e.g. ANTHROPIC_API_KEY); the fixed entries below still win
     HOME: home, USER: user, LOGNAME: process.env.LOGNAME ?? user,
     PATH: o.path ?? process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     SHELL: "/bin/bash", TMPDIR: join(wt, ".wd-tmp"), WD_THREAD: s.thread, WD_KEY: `${s.thread}-${s.epoch}`,
@@ -41,6 +42,20 @@ export function claudeArgs(s: StartTurn): string[] {
     "--dangerously-skip-permissions", ...(s.model ? ["--model", s.model] : []),
   ];
 }
+
+// pi reads the same stdin prompt and writes its own JSONL event stream to stdout. One --session-id flag covers both
+// the first turn (creates it) and follow-ups (reopens it), and --approve trusts the worktree's project files.
+// Billing: an anthropic model paid by API credits gets --api-key (it beats pi's stored session); everything else
+// (session billing, or any other provider) uses pi's own auth store.
+export function piArgs(s: StartTurn, apiKey?: string): string[] {
+  const anthropicModel = typeof s.model === "string" && s.model.startsWith("anthropic/");
+  const byKey = s.billing !== "session" && anthropicModel;
+  if (byKey && !apiKey) throw new Error("api billing needs ANTHROPIC_API_KEY in the agent's envFile");
+  return ["-p", "--mode", "json", "--approve", "--no-mcp", ...(byKey ? ["--api-key", apiKey!] : []), "--session-id", s.sessionId, ...(s.model ? ["--model", s.model] : [])];
+}
+
+// Session billing means the runner's stored subscription login pays: no API keys from the envFile reach the turn.
+export const sessionEnv = (env: Record<string, string>) => Object.fromEntries(Object.entries(env).filter(([k]) => !k.endsWith("_API_KEY")));
 
 // Every word is quoted here and the file is started by path, because systemd rewrites ${NAME} and $$ in a unit's own
 // arguments. The lock dir makes a second start of the same turn leave at once. The exit file is the only record of
@@ -78,8 +93,12 @@ export async function launch(cfg: AgentConfig, s: StartTurn, wt: string, target:
   const sccache = target && !cargoWrapper(process.env.HOME ?? userInfo().homedir, wt) ? Bun.which("sccache", { PATH: cfg.path }) : null;
   const mode = process.platform === "linux" ? "systemd" : "pgroup";
   const meta: TurnMeta = { s, key, dir, wt, mode, pid: null, unit: mode === "systemd" ? `wd-${key}` : null, startedAt: Date.now(), target };
+  const bin = s.runner === "pi" ? cfg.pi : cfg.claude;
+  if (!bin) throw new Error(`a ${s.runner ?? "claude"} turn needs the agent's ${s.runner === "pi" ? "pi" : "claude"} binary in agent.json`);
+  const envFile = envFromFile(cfg.envFile), extra = s.billing === "session" ? sessionEnv(envFile) : envFile;
+  const args = s.runner === "pi" ? piArgs(s, envFile.ANTHROPIC_API_KEY) : claudeArgs(s);
   writeFileSync(join(dir, "prompt.txt"), s.prompt);
-  writeFileSync(join(dir, "run.sh"), runScript(dir, cfg.claude, claudeArgs(s), turnEnv(s, wt, { target, sccache, path: cfg.path })));
+  writeFileSync(join(dir, "run.sh"), runScript(dir, bin, args, turnEnv(s, wt, { target, sccache, path: cfg.path, extra })));
   if (mode === "systemd") {
     if (/[$%]/.test(dir + wt)) throw new Error(`a path with "$" or "%" cannot go on a systemd-run line: ${dir} ${wt}`);
     const r = await run(["systemd-run", ...systemdRunArgs({ unit: meta.unit!, dir, cwd: wt, memoryMb: s.memoryMaxMb, seconds: s.runtimeMaxSec })]);

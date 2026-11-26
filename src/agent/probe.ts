@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, statfsSync, writeFileSync } from "
 import { cpus, freemem, loadavg, totalmem, userInfo } from "node:os";
 import { join } from "node:path";
 import type { Probe } from "../shared/types";
-import { type AgentConfig, run } from "./config";
+import { type AgentConfig, envFromFile, run } from "./config";
 
 interface Login { at: number; ok: boolean; error: string | null; expires: number | null; claude: string }
 let login: Login | null = null, gen = 0;
@@ -11,15 +11,39 @@ let login: Login | null = null, gen = 0;
 // only reused for the claude it checked (several agents share this module in tests).
 export const resetLoginCache = () => { login = null; gen++; };
 
+interface Pi { at: number; ok: boolean; error: string | null; version: string | null }
+let pi: Pi | null = null, piGen = 0;
+export const resetPiCache = () => { pi = null; piGen++; };
+
+// pi's readiness: the binary answers, and one tiny real call on the probe model succeeds, in the same fixed
+// environment a turn gets. Cached like the login check.
+export async function piCheck(cfg: AgentConfig): Promise<Pi> {
+  if (pi && Date.now() - pi.at < (pi.ok ? 3_600_000 : 120_000)) return pi;
+  const user = process.env.USER ?? userInfo().username, mine = piGen;
+  const env = { ...envFromFile(cfg.envFile), HOME: process.env.HOME ?? userInfo().homedir, USER: user, LOGNAME: user, PATH: process.env.PATH };
+  const fail = (error: string, version: string | null = null): Pi => { const r = { at: Date.now(), ok: false, error, version }; if (mine === piGen) pi = r; return r; };
+  const v = await run([cfg.pi!, "--version"], { timeout: 20_000 });
+  if (!v.ok) return fail(`pi not runnable (${cfg.pi}): ${v.err.slice(0, 200)}`);
+  const version = v.out.split(/\s+/)[0] || null;
+  const r = await run([cfg.pi!, "-p", "--mode", "text", "--approve", "--no-session", ...(cfg.piProbe?.model ? ["--model", cfg.piProbe.model] : []), "Reply with exactly: ok"], {
+    cwd: cfg.dataDir, timeout: 120_000, env,
+  });
+  if (!r.ok || !r.out.trim()) return fail(r.ok ? "pi -p produced no output" : `pi -p failed (exit ${r.code}): ${(r.err || r.out).slice(0, 300)}`, version);
+  const out: Pi = { at: Date.now(), ok: true, error: null, version };
+  if (mine === piGen) pi = out;
+  return out;
+}
+
 // The login check costs a real (tiny) model call, so a good result is kept for an hour. A bad one is rechecked
 // after two minutes, so a fixed login is noticed without hammering.
 export async function loginCheck(cfg: AgentConfig): Promise<Login> {
   if (login && login.claude === cfg.claude && Date.now() - login.at < (login.ok ? 3_600_000 : 120_000)) return login;
   const user = process.env.USER ?? userInfo().username, mine = gen;
   // The same fixed environment a turn gets (env -i): a login that only works from the agent's own env is no login.
+  // The agent's envFile joins it on both sides, so an API key there counts for the probe and the turns alike.
   const r = await run([cfg.claude, "-p", "ok", "--model", "haiku", "--output-format", "json", "--max-turns", "1"], {
     cwd: cfg.dataDir, timeout: 120_000,
-    env: { HOME: process.env.HOME ?? userInfo().homedir, USER: user, LOGNAME: user, PATH: process.env.PATH },
+    env: { ...envFromFile(cfg.envFile), HOME: process.env.HOME ?? userInfo().homedir, USER: user, LOGNAME: user, PATH: process.env.PATH },
   });
   let res: any = null;
   try { const j = JSON.parse(r.out); res = Array.isArray(j) ? j.findLast((e) => e?.type === "result") : j; } catch {}
@@ -53,9 +77,13 @@ export async function probe(cfg: AgentConfig): Promise<Probe> {
   const problems: string[] = [];
   const v = await run([cfg.claude, "--version"], { timeout: 20_000 });
   const claudeVersion = v.ok ? v.out.split(/\s+/)[0] || null : null;
-  if (!claudeVersion) problems.push(`claude not runnable (${cfg.claude}): ${v.err.slice(0, 200)}`);
   const lg = claudeVersion ? await loginCheck(cfg) : null;
-  if (lg && !lg.ok) problems.push(`claude login: ${lg.error}`);
+  // Runner readiness is not a host problem: a host that lost its claude login still serves pi threads, and vice versa.
+  // The scheduler refuses the host only when no runner works, and fit() checks the thread's own runner.
+  let loginError: string | null = null;
+  if (!claudeVersion) loginError = `claude not runnable (${cfg.claude}): ${v.err.slice(0, 200)}`;
+  else if (lg && !lg.ok) loginError = lg.error;
+  const pg = cfg.pi ? await piCheck(cfg) : null;   // no pi in agent.json: the host simply has no pi runner
   const diskFreePct = Math.round((fs.bavail / fs.blocks) * 1000) / 10;
   if (diskFreePct < 5) problems.push(`disk almost full (${diskFreePct}% free)`);
   if (fs.files > 0 && fs.ffree / fs.files < 0.05) problems.push("inodes almost exhausted");
@@ -69,7 +97,8 @@ export async function probe(cfg: AgentConfig): Promise<Probe> {
     os, cores: cpus().length, memTotalMb: Math.round(totalmem() / 1048576), memAvailMb: await memAvailMb(),
     load1: Math.round(loadavg()[0] * 100) / 100, cpuScore: speed(join(cfg.dataDir, "speed")),
     diskFreePct, diskFreeGb: Math.round((fs.bavail * fs.bsize) / 1e9), claudeVersion,
-    loginOk: !!lg?.ok, loginError: lg && !lg.ok ? lg.error : null, loginExpiresAt: lg?.expires ?? null, problems,
+    loginOk: !!lg?.ok && !!claudeVersion, loginError, loginExpiresAt: lg?.expires ?? null,
+    piVersion: pg?.version ?? null, piOk: !!pg?.ok, piError: pg && !pg.ok ? pg.error : null, problems,
   };
 }
 

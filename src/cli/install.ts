@@ -86,22 +86,22 @@ export const localTarget = (): Target => ({
 });
 export const openTarget = (host: string) => (host === "local" ? localTarget() : sshTarget(host));
 
-interface Facts { uname: string; home: string; loginPath: string; claude?: string; tsIp?: string }
+interface Facts { uname: string; home: string; loginPath: string; claude?: string; pi?: string; tsIp?: string }
 // The target's own login shell (bash or zsh) supplies its PATH: a Mac with only ~/.zprofile gets Homebrew's PATH there and nowhere else.
-// Common install dirs are added when they exist, so claude and gh are still found if the profile does not set them. Sent on stdin to
+// Common install dirs are added when they exist, so claude, pi and gh are still found if the profile does not set them. Sent on stdin to
 // `bash -s`, so it works whatever the target's login shell is (fish, ...).
 const PROBE_PRELUDE = `S="$SHELL"; case "\${S##*/}" in bash|zsh) ;; *) S=bash;; esac
 FIX='for d in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin"; do [ -d "$d" ] && case ":$PATH:" in *":$d:"*) ;; *) PATH="$PATH:$d";; esac; done;'
 lp() { "$S" -lc "$FIX $1" </dev/null; }
 li() { "$S" -lic "$FIX $1" </dev/null 2>/dev/null | tail -1; }
 `;
-// Workers get the target's login PATH (cargo, bun, ...); the services bind to its tailnet address. claude may be on PATH only in an
+// Workers get the target's login PATH (cargo, bun, ...); the services bind to its tailnet address. claude and pi may be on PATH only in an
 // interactive shell (~/.bashrc adds linuxbrew), so that is tried too; tail keeps its answer and drops what rc files print.
 async function facts(t: Target): Promise<Facts> {
-  const [uname, home, loginPath, claude, ip] = (await t.sh("bash -s", PROBE_PRELUDE +
-    `uname -sm; echo $HOME; lp 'echo $PATH'; lp 'command -v claude' || li 'command -v claude' || echo; lp 'tailscale ip -4 || /Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4' 2>/dev/null | head -1\n`,
+  const [uname, home, loginPath, claude, pi, ip] = (await t.sh("bash -s", PROBE_PRELUDE +
+    `uname -sm; echo $HOME; lp 'echo $PATH'; lp 'command -v claude' || li 'command -v claude' || echo; lp 'command -v pi' || li 'command -v pi' || echo; lp 'tailscale ip -4 || /Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4' 2>/dev/null | head -1\n`,
   )).trim().split("\n");
-  return { uname, home, loginPath, claude: claude?.trim() || undefined, tsIp: /^\d+\.\d+\.\d+\.\d+$/.test(ip?.trim() ?? "") ? ip.trim() : undefined };
+  return { uname, home, loginPath, claude: claude?.trim() || undefined, pi: pi?.trim() || undefined, tsIp: /^\d+\.\d+\.\d+\.\d+$/.test(ip?.trim() ?? "") ? ip.trim() : undefined };
 }
 
 // From a source checkout the target's binary is built here. Without one, this wd copies itself to a target of its own
@@ -183,12 +183,13 @@ export async function coordInstall(host: string, o: { listen?: string } = {}, t:
 }
 
 // ---- wd host install ----
-export interface InstallOpts { host: string; name?: string; coordUrl?: string; hostToken?: string; labels?: string[]; gitTokenFile?: string; claude?: string; listen?: string; agentUrl?: string }
+export interface InstallOpts { host: string; name?: string; coordUrl?: string; hostToken?: string; labels?: string[]; gitTokenFile?: string; claude?: string; pi?: string; listen?: string; agentUrl?: string }
 
 // gitTokenFile is where the host keeps the GitHub token the agent pushes with; without it pushes would rely on the host's own keyring or ssh agent.
 export const agentJson = (o: InstallOpts, os: string) => ({
   name: o.name ?? o.host, listen: o.listen ?? "0.0.0.0:7781", coordUrl: o.coordUrl, token: o.hostToken, dataDir: "~/.wd", labels: o.labels ?? [os],
   ...(o.claude ? { claude: o.claude } : {}),
+  ...(o.pi ? { pi: o.pi, piProbe: { model: "deepseek/deepseek-flash" } } : {}),
   ...(o.gitTokenFile ? { gitTokenFile: o.gitTokenFile } : {}),
 });
 
@@ -196,6 +197,7 @@ const GIT_TOKEN = "~/.config/wd/git-token";
 export async function hostInstall(o: InstallOpts, t: Target = openTarget(o.host), d: Deps = {}): Promise<void> {
   const log = d.log ?? console.log, f = await facts(t);
   o.claude ??= f.claude;
+  o.pi ??= f.pi;
   o.name ??= t.local ? hostname().split(".")[0] : sshName(t);
   o.listen ??= f.tsIp ? `${f.tsIp}:${AGENT_PORT}` : t.local ? `127.0.0.1:${AGENT_PORT}` : `0.0.0.0:${AGENT_PORT}`;
   const client = d.client ?? loadCfg(), api = d.call ?? call;

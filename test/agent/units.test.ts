@@ -2,10 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classify, claudeArgs, cpuCounter, cpuMsOf, status, sweep, type TurnMeta, parsePs, quote, runScript, systemdRunArgs, treeOf, turnEnv, outside, cargoWrapper } from "../../src/agent/launch";
+import { classify, claudeArgs, cpuCounter, cpuMsOf, status, sweep, type TurnMeta, parsePs, piArgs, quote, runScript, sessionEnv, systemdRunArgs, treeOf, turnEnv, outside, cargoWrapper } from "../../src/agent/launch";
 import { readLines } from "../../src/agent/tail";
 import { authArgs, leaseTarget, poolSize, releaseTarget } from "../../src/agent/workspace";
-import { loadConfig } from "../../src/agent/config";
+import { envFromFile, loadConfig } from "../../src/agent/config";
 import type { StartTurn } from "../../src/shared/types";
 
 const dirs: string[] = [];
@@ -52,6 +52,21 @@ describe("run script and environment", () => {
     } finally { for (const k of ["GH_TOKEN", "GITHUB_TOKEN", "SSH_AUTH_SOCK", "RANDOM_THING"]) delete process.env[k]; }
   });
 
+  test("turnEnv merges the envFile's vars; the fixed entries still win", () => {
+    const e = turnEnv(start(), "/wt/t1", { extra: { ANTHROPIC_API_KEY: "sk-ant-1", HOME: "/evil", USER: "root", PATH: "/evil/bin" } });
+    expect(e.ANTHROPIC_API_KEY).toBe("sk-ant-1");
+    expect(e.HOME).not.toBe("/evil");
+    expect(e.USER).not.toBe("root");
+    expect(e.PATH).not.toBe("/evil/bin");
+  });
+
+  test("envFromFile: KEY=value lines, comments and blanks skipped, export stripped, junk dropped", () => {
+    const f = join(tmp(), "api-keys.env");
+    writeFileSync(f, "# a key\nexport ANTHROPIC_API_KEY = sk-ant-123\nDEEPSEEK_API_KEY=ds-456\n\nBAD LINE\n1BAD=x\nA=1\n");
+    expect(envFromFile(f)).toEqual({ ANTHROPIC_API_KEY: "sk-ant-123", DEEPSEEK_API_KEY: "ds-456", A: "1" });
+    expect(envFromFile(join(tmp(), "missing.env"))).toEqual({});
+  });
+
   test("claudeArgs: session-id on the first turn, resume later, model only when asked", () => {
     expect(claudeArgs(start())).toContain("--session-id");
     expect(claudeArgs(start({ resume: true }))).toEqual(expect.arrayContaining(["--resume", "sid"]));
@@ -60,6 +75,27 @@ describe("run script and environment", () => {
     expect(claudeArgs(start({ model: "opus" }))).toEqual(expect.arrayContaining(["--model", "opus"]));
     const settings = JSON.parse(claudeArgs(start())[claudeArgs(start()).indexOf("--settings") + 1]);
     expect(settings).toEqual({ crossSessionInbound: "refuse", syncClaudeAiPlugins: false, syncClaudeAiSkills: false });
+  });
+
+  test("piArgs: print + json stream, --session-id every turn, no MCP, model only when asked", () => {
+    const a = piArgs(start());
+    expect(a).toEqual(["-p", "--mode", "json", "--approve", "--no-mcp", "--session-id", "sid"]);
+    expect(piArgs(start({ resume: true }))).toContain("--session-id");
+    expect(piArgs(start({ model: "deepseek/deepseek-flash" }))).toEqual(expect.arrayContaining(["--model", "deepseek/deepseek-flash"]));
+  });
+
+  test("piArgs billing: api billing passes --api-key only for anthropic models; session billing never does", () => {
+    const anth = { model: "anthropic/claude-sonnet-5-5:high" }, ds = { model: "deepseek/deepseek-flash" };
+    expect(piArgs(start(anth), "sk-ant-1")).toEqual(expect.arrayContaining(["--api-key", "sk-ant-1"]));
+    expect(piArgs(start(ds), "sk-ant-1")).not.toContain("--api-key");
+    expect(piArgs(start({ ...anth, billing: "session" }), "sk-ant-1")).not.toContain("--api-key");
+    expect(piArgs(start({ billing: "session" }), "sk-ant-1")).not.toContain("--api-key");
+    expect(() => piArgs(start(anth))).toThrow("ANTHROPIC_API_KEY");
+  });
+
+  test("sessionEnv drops API keys and keeps everything else", () => {
+    expect(sessionEnv({ ANTHROPIC_API_KEY: "a", DEEPSEEK_API_KEY: "b", WD_THREAD: "t", FOO: "1" })).toEqual({ WD_THREAD: "t", FOO: "1" });
+    expect(sessionEnv({})).toEqual({});
   });
 
   test("runScript writes exit atomically and reads the prompt from a file", () => {

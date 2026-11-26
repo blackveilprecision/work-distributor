@@ -210,7 +210,7 @@ describe("hosts and repos registered at runtime", () => {
     expect((await call("PUT", "/hosts/a%2Fb", { url: "http://x:1" })).status).toBe(400);
     // placement and the agent client see the registered host without a restart
     await h.sched.tick(); await h.sched.idle();
-    const id = (await call("POST", "/threads", { caller: "c", repo: "o/app", prompt: "p" })).body.id;
+    const id = (await call("POST", "/threads", { caller: "c", repo: "o/app", prompt: "p", billing: "session" })).body.id;
     await h.sched.tick();
     expect((await call("GET", `/threads/${id}`)).body.host).toBe("box1");
     const sent: string[] = [];
@@ -295,7 +295,7 @@ describe("usage-limit hold", () => {
     const { h, call } = api();
     await ready(h, ["a"]);
     h.db.setMeta("hold_until", String(Date.now() + 3_600_000));
-    const id = (await call("POST", "/threads", { caller: "c", repo: "o/app", prompt: "p" })).body.id;
+    const id = (await call("POST", "/threads", { caller: "c", repo: "o/app", prompt: "p", billing: "session" })).body.id;
     await h.sched.tick();
     expect(h.db.thread(id)!.state).toBe("queued");
     const r = await call("DELETE", "/hold");

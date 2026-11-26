@@ -28,6 +28,16 @@ describe("summarize", () => {
     expect(summarize(assistant({ type: "text", text: "y".repeat(500) }))[0]).toHaveLength(140);
   });
 
+  test("pi events: tool start, tool result, final message, turn end", () => {
+    expect(summarize(JSON.stringify({ type: "toolcall_start", contentIndex: 0, id: "c1", toolName: "bash" }))).toEqual(["bash: …"]);
+    expect(summarize(JSON.stringify({ type: "tool_execution_end", toolName: "bash", isError: false, result: { content: [{ type: "text", text: "hello\n" }] } }))).toEqual(["↳ hello"]);
+    expect(summarize(JSON.stringify({ type: "tool_execution_end", toolName: "bash", isError: true, result: { content: [{ type: "text", text: "nope" }] } }))).toEqual(["↳ error: nope"]);
+    expect(summarize(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Looking\nat src" }] } }))).toEqual(["Looking at src"]);
+    expect(summarize(JSON.stringify({ type: "message_end", message: { role: "system", content: [] } }))).toEqual([]);
+    expect(summarize(JSON.stringify({ type: "turn_end", message: { role: "assistant", content: [{ type: "text", text: "All done." }], stopReason: "stop" } }))).toEqual(["done: All done."]);
+    expect(summarize(JSON.stringify({ type: "turn_end", message: { role: "assistant", content: [{ type: "text", text: "Too long." }], stopReason: "length" } }))).toEqual(["done (length): Too long."]);
+  });
+
   test("a line the agent cut at 8000 chars still names its tool call; other cut lines are skipped", () => {
     const cut = assistant(toolUse("Write", { file_path: "big.ts", content: "z".repeat(9000) })).slice(0, 8000);
     expect(summarize(cut)).toEqual(["Write: big.ts"]);

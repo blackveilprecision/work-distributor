@@ -13,7 +13,9 @@ export interface SubmitRequest {
   repo: string;              // a registered repo id, e.g. "acme/shop"
   ref?: string;              // base ref, default the repo's default branch
   prompt: string;
-  model?: string;            // passed to claude --model
+  model?: string;            // passed to the runner's --model
+  runner?: "claude" | "pi";  // which agent runs the thread; default claude. pi models are "provider/id[:thinking]"
+  billing?: "api" | "session";  // who pays for the turn; default api (the envFile's keys). session: the runner's stored subscription login
   requires?: string[];       // host labels that must all be present; every host also has its own name as a label
   size?: "small" | "heavy";  // only a hint until p90 estimates exist
   priority?: boolean;
@@ -50,6 +52,7 @@ export interface HostView {
   cpuScore: number | null;     // single-core benchmark, the best seen (agent/probe.ts): relative host speed
   cpuPromisedCores: number;    // CPU promised to running turns and not in use yet
   running: number; maxThreads: number | null;   // null: no cap, memory and CPU decide claudeVersion: string | null; loginExpiresAt: number | null; lastSeenAt: number | null;
+  piVersion: string | null; piOk: boolean; piError: string | null;   // the pi runner's readiness (nulls before 0.4.8)
   doctorFailed: string[];      // repos whose doctor fails here: none of their threads go to this host
   why?: string | null;         // GET /hosts?repo=: why a thread of that repo cannot start here now; null when it can
 }
@@ -81,8 +84,10 @@ export interface Steps { thread: string; turn: number; running: boolean; steps: 
 export interface StartTurn {
   thread: string; epoch: number; turn: number;
   repoUrl: string; repoId: string; ref: string; branch: string;
-  sessionId: string; resume: boolean;   // turn 1: --session-id, later turns: --resume
+  sessionId: string; resume: boolean;   // claude turn 1: --session-id, later turns: --resume; pi: --session-id every turn
   prompt: string; model?: string;
+  runner?: "claude" | "pi";            // absent = claude; pi runs the agent's `pi` binary instead of `claude`
+  billing?: "api" | "session";         // absent = api: the envFile's keys bill the turn; session drops *_API_KEY and uses the stored login
   memoryMaxMb: number; runtimeMaxSec: number;
   rust: boolean;                        // lease a target dir + sccache
 }
@@ -98,6 +103,7 @@ export interface Probe {
   diskFreePct: number; diskFreeGb: number;
   load1?: number; cpuScore?: number;   // absent from agents before 0.4.0
   claudeVersion: string | null; loginOk: boolean; loginError: string | null; loginExpiresAt: number | null;
+  piVersion: string | null; piOk: boolean; piError: string | null;   // absent from agents before 0.4.8: all null
   problems: string[];          // anything that should refuse the host, human readable
 }
 export interface UnitStatus { thread: string; epoch: number; turn: number; running: boolean; cpuMs: number; memPeakMb: number }

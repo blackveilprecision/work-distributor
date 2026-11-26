@@ -35,13 +35,13 @@ test("agent.json carries gitTokenFile only when asked for", () => {
 
 // ---- the install flows, against a recording Target (no ssh, no build, no real machine) ----
 
-function fakeTarget(o: { uname?: string; ip?: string; claude?: string; files?: Record<string, string>; gh?: "wrote" | "kept" | "none" | "nogh"; healthy?: boolean; local?: boolean } = {}) {
+function fakeTarget(o: { uname?: string; ip?: string; claude?: string; pi?: string; files?: Record<string, string>; gh?: "wrote" | "kept" | "none" | "nogh"; healthy?: boolean; local?: boolean } = {}) {
   const log: { cmd: string; stdin?: string }[] = [], copied: string[] = [], built: string[] = [], files = { ...o.files };
   const t: Target = {
     name: o.local ? "local" : "u@box", local: !!o.local,
     async sh(cmd, stdin) {
       log.push({ cmd, stdin });
-      if (cmd === "bash -s" && stdin?.includes("uname -sm")) return [o.uname ?? "Linux x86_64", "/home/u", "/usr/local/bin:/usr/bin", o.claude ?? "/home/u/.local/bin/claude", o.ip ?? "100.64.0.9"].join("\n") + "\n";
+      if (cmd === "bash -s" && stdin?.includes("uname -sm")) return [o.uname ?? "Linux x86_64", "/home/u", "/usr/local/bin:/usr/bin", o.claude ?? "/home/u/.local/bin/claude", o.pi ?? "", o.ip ?? "100.64.0.9"].join("\n") + "\n";
       const m = cmd.match(/^test -f (\S+) &&/);
       if (m) return files[m[1]] !== undefined ? "yes" : "no";
       if (cmd.startsWith("cat ~/.config/wd/coord.json")) return files["~/.config/wd/coord.json"];

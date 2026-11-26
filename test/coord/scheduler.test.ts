@@ -272,18 +272,21 @@ describe("placement", () => {
   test("rate_limit_event rejected holds starts until reset and is reported", async () => {
     const h = harness();
     await ready(h, ["a"]);
-    const t1 = submit(h);
+    const t1 = submit(h, { billing: "session" });
     await h.sched.tick();
     const reset = Math.floor(h.clock.t / 1000) + 600;
     const line = JSON.stringify({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: reset } });
     expect(h.sched.onEvents({ host: "a", thread: t1, epoch: 1, turn: 1, offset: 0, lines: [line], nextOffset: line.length + 1 })).toEqual({ committed: line.length + 1 });
     expect(h.reports.pending("orch:x")[0].reason).toContain("held");
-    const t2 = submit(h);
+    const t2 = submit(h, { billing: "session" });
     await h.sched.tick();
     expect(state(h, t2)).toBe("queued");
     h.advance(601_000); h.sched.onHeartbeat(hb("a"));
     await h.sched.tick();
     expect(state(h, t2)).toBe("running");
+    const t3 = submit(h);   // api-billed: never waits on the subscription's hold
+    await h.sched.tick();
+    expect(state(h, t3)).toBe("running");
   });
 });
 
@@ -563,7 +566,7 @@ describe("review fixes", () => {
   test("follow-up turns are held during a rate-limit hold", async () => {
     const h = harness();
     await ready(h, ["a"]);
-    const id = submit(h);
+    const id = submit(h, { billing: "session" });
     await h.sched.tick();
     h.sched.onTurnEnd(turnEnd("a", id, 1, 1));
     h.db.setMeta("hold_until", String(h.clock.t + 600_000));
