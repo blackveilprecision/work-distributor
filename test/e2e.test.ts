@@ -70,7 +70,7 @@ beforeAll(async () => {
   writeFileSync(coordCfg, JSON.stringify({
     listen: `127.0.0.1:${coordPort}`, db: dbFile, callerToken: TOKEN, tickMs: 300,
     hosts: { h1: { url: `http://127.0.0.1:${agentPort}`, token: HOST_TOKEN } },
-    repos: { "o/r": { url: origin, defaultRef: "main", requires: [], rust: false } },
+    repos: { "o/r": { url: origin, defaultRef: "main", requires: [] } },
     floors: { diskFreePct: 0, memReserveMb: 0, cpuOversub: 1000 },
   }));
   agentCfg = join(root, "agent.json");

@@ -35,8 +35,8 @@ export function harness(over: Record<string, unknown> = {}) {
     callerToken: "ct", db: ":memory:",
     hosts: { a: { url: "http://a", token: "ta" }, b: { url: "http://b", token: "tb" }, c: { url: "http://c", token: "tc" } },
     repos: {
-      "o/app": { url: "git@x:o/app.git", defaultRef: "main", doctor: "true", requires: [], rust: false },
-      "o/rs": { url: "git@x:o/rs.git", defaultRef: "dev", requires: [], rust: true },
+      "o/app": { url: "git@x:o/app.git", defaultRef: "main", doctor: "true", requires: [] },
+      "o/rs": { url: "git@x:o/rs.git", defaultRef: "dev", requires: [] },
     },
     ...over,
   });

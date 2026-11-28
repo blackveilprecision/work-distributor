@@ -2,16 +2,16 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classify, claudeArgs, HEADLESS_NOTE, TARGET_NOTE, cpuCounter, cpuMsOf, status, sweep, type TurnMeta, parsePs, piArgs, quote, runScript, sessionEnv, systemdRunArgs, treeOf, turnEnv, outside, cargoWrapper } from "../../src/agent/launch";
+import { classify, claudeArgs, HEADLESS_NOTE, cpuCounter, cpuMsOf, status, sweep, type TurnMeta, parsePs, piArgs, quote, runScript, sessionEnv, systemdRunArgs, treeOf, turnEnv, outside } from "../../src/agent/launch";
 import { readLines } from "../../src/agent/tail";
-import { authArgs, claimTarget, leaseTarget, poolSize, releaseTarget } from "../../src/agent/workspace";
+import { authArgs, dropBuildOutput } from "../../src/agent/workspace";
 import { envFromFile, loadConfig } from "../../src/agent/config";
 import type { StartTurn } from "../../src/shared/types";
 
 const dirs: string[] = [];
 const tmp = () => { const d = mkdtempSync(join(tmpdir(), "wd-unit-")); dirs.push(d); return d; };
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
-const start = (o: Partial<StartTurn> = {}): StartTurn => ({ thread: "t1", epoch: 3, turn: 2, repoUrl: "u", repoId: "a/b", ref: "main", branch: "wd/t1", sessionId: "sid", resume: false, prompt: "p", memoryMaxMb: 2048, runtimeMaxSec: 600, rust: false, ...o });
+const start = (o: Partial<StartTurn> = {}): StartTurn => ({ thread: "t1", epoch: 3, turn: 2, repoUrl: "u", repoId: "a/b", ref: "main", branch: "wd/t1", sessionId: "sid", resume: false, prompt: "p", memoryMaxMb: 2048, runtimeMaxSec: 600, ...o });
 
 describe("systemd launch (argument building only)", () => {
   test("systemd-run line carries the limits and runs run.sh by path, without --collect", () => {
@@ -46,10 +46,9 @@ describe("run script and environment", () => {
   test("turnEnv is fixed and never carries credentials", () => {
     process.env.GH_TOKEN = "a"; process.env.GITHUB_TOKEN = "b"; process.env.SSH_AUTH_SOCK = "c"; process.env.RANDOM_THING = "d";
     try {
-      const e = turnEnv(start(), "/wt/t1", { target: "/t/0", sccache: "/bin/sccache" });
-      expect(Object.keys(e).sort()).toEqual(["CARGO_TARGET_DIR", "DISABLE_AUTOUPDATER", "HOME", "LOGNAME", "PATH", "RUSTC_WRAPPER", "SHELL", "TMPDIR", "USER", "WD_KEY", "WD_THREAD"]);
+      const e = turnEnv(start(), "/wt/t1");
+      expect(Object.keys(e).sort()).toEqual(["DISABLE_AUTOUPDATER", "HOME", "LOGNAME", "PATH", "SHELL", "TMPDIR", "USER", "WD_KEY", "WD_THREAD"]);
       expect(e).toMatchObject({ WD_KEY: "t1-3", WD_THREAD: "t1", TMPDIR: "/wt/t1/.wd-tmp", SHELL: "/bin/bash", DISABLE_AUTOUPDATER: "1" });
-      expect(Object.keys(turnEnv(start(), "/wt/t1"))).not.toContain("CARGO_TARGET_DIR");
     } finally { for (const k of ["GH_TOKEN", "GITHUB_TOKEN", "SSH_AUTH_SOCK", "RANDOM_THING"]) delete process.env[k]; }
   });
 
@@ -76,7 +75,6 @@ describe("run script and environment", () => {
     expect(claudeArgs(start({ model: "opus" }))).toEqual(expect.arrayContaining(["--model", "opus"]));
     expect(claudeArgs(start())).not.toContain("--effort");
     expect(claudeArgs(start())).toEqual(expect.arrayContaining(["--append-system-prompt", HEADLESS_NOTE]));
-    expect(claudeArgs(start({ rust: true }))).toEqual(expect.arrayContaining(["--append-system-prompt", HEADLESS_NOTE + TARGET_NOTE]));
     expect(claudeArgs(start({ effort: "high" }))).toEqual(expect.arrayContaining(["--effort", "high"]));
     const settings = JSON.parse(claudeArgs(start())[claudeArgs(start()).indexOf("--settings") + 1]);
     expect(settings).toEqual({ crossSessionInbound: "refuse", syncClaudeAiPlugins: false, syncClaudeAiSkills: false });
@@ -214,7 +212,7 @@ describe("tailer reader", () => {
 });
 
 describe("workspace pieces", () => {
-  const cfg = (dataDir: string, extra = {}) => ({ name: "h", listen: "x", coordUrl: "x", token: "x", dataDir, claude: "c", labels: [], maxThreads: 1, targetDirPool: 2, heartbeatSec: 1, tailMs: 1, pushEverySec: 1, ...extra });
+  const cfg = (dataDir: string, extra = {}) => ({ name: "h", listen: "x", coordUrl: "x", token: "x", dataDir, claude: "c", labels: [], maxThreads: 1, heartbeatSec: 1, tailMs: 1, pushEverySec: 1, ...extra });
 
   test("the git credential helper reads the token file at run time and clears other helpers", () => {
     expect(authArgs(cfg("/d"))).toEqual([]);
@@ -224,26 +222,17 @@ describe("workspace pieces", () => {
     expect(a.join(" ")).not.toContain("ghp_");
   });
 
-  test("target dir pool: capped, warmest free dir first, stale locks taken over, one holder at a time", () => {
-    const d = tmp(), c = cfg(d);
-    const live = new Set<string>();
-    const lease = (k: string) => { live.add(k); return leaseTarget(c, "a/b", k, (x) => live.has(x)); };
-    const a = lease("k1")!, b = lease("k2")!;
-    expect(a).not.toBe(b);
-    expect(lease("k3")).toBeNull();   // cap of 2 reached
-    expect(poolSize(c, "a/b")).toBe(2);
-    writeFileSync(join(b, "warm"), "x");
-    releaseTarget(b);
-    live.delete("k2");
-    releaseTarget(a);
-    live.delete("k1");
-    expect(lease("k4")).toBe(a);   // released last, so warmest
-    expect(lease("k5")).toBe(b);
-    // a crashed turn: its lock stays but nothing is live any more
-    live.clear();
-    expect(lease("k6")).not.toBeNull();
-    expect(existsSync(join(b, "warm"))).toBe(true);   // reuse keeps the warm contents
+  test("build output in the worktree goes at the end of a turn; the rest of the worktree stays", () => {
+    const wt = tmp();
+    mkdirSync(join(wt, "target/debug"), { recursive: true });
+    writeFileSync(join(wt, "target/debug/big"), "x");
+    writeFileSync(join(wt, "src.rs"), "fn main() {}");
+    dropBuildOutput(wt);
+    expect(existsSync(join(wt, "target"))).toBe(false);
+    expect(existsSync(join(wt, "src.rs"))).toBe(true);
+    dropBuildOutput(wt);   // nothing to drop is fine
   });
+
 
   test("config: defaults, ~ expansion and required keys", () => {
     const f = join(tmp(), "agent.json");
@@ -273,7 +262,7 @@ describe("darwin process group (ps based)", () => {
     writeFileSync(join(dir, "run.sh"), "(trap '' TERM; exec sleep 300) &\nexit 0\n");   // the leader exits at once, the child ignores TERM
     const p = Bun.spawn(["/bin/bash", join(dir, "run.sh")], { detached: true, stdio: ["ignore", "ignore", "ignore"] });
     p.unref();
-    const meta: TurnMeta = { s: start(), key: "t1-3-2", dir, wt: dir, mode: "pgroup", pid: p.pid, unit: null, startedAt: Date.now(), target: null };
+    const meta: TurnMeta = { s: start(), key: "t1-3-2", dir, wt: dir, mode: "pgroup", pid: p.pid, unit: null, startedAt: Date.now()};
     await p.exited;
     await Bun.sleep(200);
     try {
@@ -299,35 +288,4 @@ test("the speed score is the best seen, and a saved one survives a restart", asy
   writeFileSync(file, "999999");   // measured while the host was quiet
   expect(speed(file)).toBe(999999);
   expect(require("node:fs").readFileSync(file, "utf8")).toBe("999999");
-});
-
-test("a rustc-wrapper in the host's or the repo's cargo config keeps wd from setting RUSTC_WRAPPER", () => {
-  const home = mkdtempSync(join(tmpdir(), "wd-home-")), wt = mkdtempSync(join(tmpdir(), "wd-wt-"));
-  expect(cargoWrapper(home, wt)).toBe(false);
-  mkdirSync(join(home, ".cargo"));
-  writeFileSync(join(home, ".cargo/config.toml"), '[build]\njobs = 4\n');
-  expect(cargoWrapper(home, wt)).toBe(false);
-  writeFileSync(join(home, ".cargo/config.toml"), '[build]\nrustc-wrapper = "/home/u/.local/bin/kache"\n');
-  expect(cargoWrapper(home, wt)).toBe(true);
-  rmSync(join(home, ".cargo/config.toml"));
-  mkdirSync(join(wt, ".cargo"));
-  writeFileSync(join(wt, ".cargo/config"), 'build.rustc-wrapper = "x"\n');
-  expect(cargoWrapper(home, wt)).toBe(true);
-});
-
-test("claimTarget: a target dir that changes worktree gets that worktree's tracked files touched; the same one is left alone", async () => {
-  const root = mkdtempSync(join(tmpdir(), "wd-claim-")), wt = join(root, "wt"), dir = join(root, "target");
-  mkdirSync(wt); mkdirSync(dir);
-  const sh = (c: string) => Bun.spawnSync(["/bin/sh", "-c", c], { cwd: wt });
-  sh("git init -q && echo a > a.rs && echo b > untracked.rs && git add a.rs && git -c user.email=t@t -c user.name=t commit -qm a");
-  const old = new Date(Date.now() - 3600_000);
-  const { utimesSync, statSync } = require("node:fs");
-  for (const f of ["a.rs", "untracked.rs"]) utimesSync(join(wt, f), old, old);
-  await claimTarget(dir, wt);
-  expect(statSync(join(wt, "a.rs")).mtimeMs).toBeGreaterThan(Date.now() - 60_000);
-  expect(statSync(join(wt, "untracked.rs")).mtimeMs).toBeLessThan(Date.now() - 60_000);
-  utimesSync(join(wt, "a.rs"), old, old);
-  await claimTarget(dir, wt);   // same worktree as last time: cargo's own times are right
-  expect(statSync(join(wt, "a.rs")).mtimeMs).toBeLessThan(Date.now() - 60_000);
-  rmSync(root, { recursive: true, force: true });
 });

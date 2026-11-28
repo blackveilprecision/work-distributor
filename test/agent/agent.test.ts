@@ -39,14 +39,15 @@ describe("a turn", () => {
     process.env.GH_TOKEN = "secret-gh";
     process.env.SSH_AUTH_SOCK = "/tmp/agent.sock";
     try {
-      const t = h.turn({ prompt: "x", model: "sonnet", rust: true });
+      const t = h.turn({ prompt: "x", model: "sonnet" });
       await h.call("/start", t);
       await endOf();
     } finally { delete process.env.GH_TOKEN; delete process.env.SSH_AUTH_SOCK; }
     const run = readFileSync(join(h.turnDir(h.turn()), "run.sh"), "utf8");
     expect(run).toContain("env -i");
     for (const bad of ["GH_TOKEN", "GITHUB_TOKEN", "SSH_AUTH_SOCK", "secret-gh"]) expect(run).not.toContain(bad);
-    for (const good of ["DISABLE_AUTOUPDATER=1", "WD_THREAD=t1", "WD_KEY=t1-1", "CARGO_TARGET_DIR=", "--setting-sources", "--strict-mcp-config", "--dangerously-skip-permissions", "crossSessionInbound", "'--model' 'sonnet'", "--session-id"]) expect(run).toContain(good);
+    for (const good of ["DISABLE_AUTOUPDATER=1", "WD_THREAD=t1", "WD_KEY=t1-1", "--setting-sources", "--strict-mcp-config", "--dangerously-skip-permissions", "crossSessionInbound", "'--model' 'sonnet'", "--session-id"]) expect(run).toContain(good);
+    expect(run).not.toContain("CARGO_TARGET_DIR");
     expect(run).toContain(`TMPDIR=${join(h.cfg.dataDir, "wt/t1/.wd-tmp")}`);
   });
 
@@ -424,9 +425,11 @@ describe("orphan sweep", () => {
     const run = await until(() => [...h.agent.ctx.active.values()].find((a) => a.meta.s.thread === "t3" && a.running), 5000);
     const strayTurn = join(D, "turns/t6-1-1");
     mkdirSync(strayTurn, { recursive: true });                     // a turn dir of a vanished thread: no process, no marker
-    const liveLease = lease("0", "t1-1-1"), orphanLease = lease("1", "t2-1-1");
+    // Old shared target dirs: only one a running turn holds stays (t3's), whether its thread is listed or not.
+    const liveLease = lease("0", "t3-1-1"), orphanLease = lease("1", "t2-1-1"), idleLease = lease("2", "t1-1-1");
+    mkdirSync(join(D, "target/acme__app/3"), { recursive: true });
     for (const th of ["t1", "t2", "t3"]) for (const p of [join(D, "wt", th), join(D, "turns", `${th}-1-1`)]) age(p);
-    for (const p of [strayTurn, liveLease, orphanLease]) age(p);   // t4 stays young
+    for (const p of [strayTurn, liveLease, orphanLease, idleLease]) age(p);   // t4 stays young
 
     h.coord.live = null;                                           // the list cannot be fetched: nothing is touched
     expect(await sweepOrphans(h.agent.ctx)).toEqual([]);
@@ -434,10 +437,10 @@ describe("orphan sweep", () => {
 
     h.coord.live = ["t1"];
     const removed = await sweepOrphans(h.agent.ctx);
-    expect(removed.sort()).toEqual(["target lease acme__app/1", "turn dir t2-1-1", "turn dir t6-1-1", "worktree t2"]);
+    expect(removed.sort()).toEqual(["old target dir acme__app/1", "old target dir acme__app/2", "old target dir acme__app/3", "turn dir t2-1-1", "turn dir t6-1-1", "worktree t2"]);
     expect(h.coord.reqs.filter((r) => r.path === "/agent/threads")).toHaveLength(3);   // start, then the two sweeps above
     for (const p of ["wt/t1", "turns/t1-1-1", "wt/t3", "turns/t3-1-1", "wt/t4", "turns/t4-1-1"]) expect(existsSync(join(D, p))).toBe(true);
-    for (const p of ["wt/t2", "wt/t2.base", "turns/t2-1-1", "turns/t6-1-1", "target/acme__app/1.lock"]) expect(existsSync(join(D, p))).toBe(false);
+    for (const p of ["wt/t2", "wt/t2.base", "turns/t2-1-1", "turns/t6-1-1", "target/acme__app/1.lock", "target/acme__app/2.lock", "target/acme__app/3"]) expect(existsSync(join(D, p))).toBe(false);
     expect(existsSync(liveLease)).toBe(true);
     expect(sh(join(D, "repos/acme__app.git"), "git", "worktree", "list")).not.toContain("wt/t2");
     expect(sh(join(D, "repos/acme__app.git"), "git", "worktree", "list")).toContain("wt/t1");

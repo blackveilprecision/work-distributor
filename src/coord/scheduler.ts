@@ -298,7 +298,7 @@ export class Scheduler {
       runner: t.runner === "pi" ? "pi" : undefined,
       // Always sent: an agent before 0.4.11 takes a missing billing for api.
       billing: t.billing === "api" ? "api" : "session",
-      memoryMaxMb: memMax, runtimeMaxSec: this.cfg.runtimeMaxSec, rust: repo.rust,
+      memoryMaxMb: memMax, runtimeMaxSec: this.cfg.runtimeMaxSec,
     };
     const mine = () => { const c = this.db.thread(t.id); return !!c && c.state === "running" && c.epoch === epoch; };
     try {

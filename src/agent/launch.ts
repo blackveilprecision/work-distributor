@@ -9,7 +9,7 @@ import { type AgentConfig, envFromFile, run, sleep } from "./config";
 
 export interface TurnMeta {
   s: StartTurn; key: string; dir: string; wt: string; mode: "systemd" | "pgroup";
-  pid: number | null; unit: string | null; startedAt: number; target: string | null;
+  pid: number | null; unit: string | null; startedAt: number;
 }
 export interface Status { running: boolean; cpuMs: number; memMb: number }
 
@@ -21,7 +21,7 @@ const read = (file: string) => (existsSync(file) ? readFileSync(file, "utf8").tr
 // What the session may see. No GH_TOKEN, GITHUB_TOKEN or SSH_AUTH_SOCK in its environment, and the agent does the
 // pushing. That is hygiene, not isolation: the worker runs as the same user, so it can still read whatever that user can
 // (gitTokenFile, the host token in ~/.config/wd/agent.json, ~/.ssh). Real isolation needs a separate user for the worker.
-export function turnEnv(s: StartTurn, wt: string, o: { target?: string | null; sccache?: string | null; path?: string; extra?: Record<string, string> } = {}): Record<string, string> {
+export function turnEnv(s: StartTurn, wt: string, o: { path?: string; extra?: Record<string, string> } = {}): Record<string, string> {
   const home = process.env.HOME ?? userInfo().homedir, user = process.env.USER ?? userInfo().username;
   return {
     ...(o.extra ?? {}),   // the agent's envFile (e.g. ANTHROPIC_API_KEY); the fixed entries below still win
@@ -29,7 +29,6 @@ export function turnEnv(s: StartTurn, wt: string, o: { target?: string | null; s
     PATH: o.path ?? process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     SHELL: "/bin/bash", TMPDIR: join(wt, ".wd-tmp"), WD_THREAD: s.thread, WD_KEY: `${s.thread}-${s.epoch}`,
     DISABLE_AUTOUPDATER: "1",
-    ...(o.target ? { CARGO_TARGET_DIR: o.target } : {}), ...(o.sccache ? { RUSTC_WRAPPER: o.sccache } : {}),
   };
 }
 
@@ -37,7 +36,6 @@ export function turnEnv(s: StartTurn, wt: string, o: { target?: string | null; s
 // background Bash or agent) dies with it. No notification ever reaches the session afterwards.
 export const HEADLESS_NOTE = "This session is headless and ends the moment you reply: background tasks (Workflow runs, background Bash, background agents) are killed then and no notification will ever arrive. Wait for every one to finish (or stop it) before your final reply.";
 
-export const TARGET_NOTE = " CARGO_TARGET_DIR is shared with other worktrees and cargo decides freshness by file times, not contents: build any extra git worktree you create with a CARGO_TARGET_DIR of its own.";
 
 export function claudeArgs(s: StartTurn): string[] {
   return [
@@ -45,7 +43,7 @@ export function claudeArgs(s: StartTurn): string[] {
     ...(s.resume ? ["--resume", s.sessionId] : ["--session-id", s.sessionId]),
     "--setting-sources", "user", "--strict-mcp-config",
     "--settings", JSON.stringify({ crossSessionInbound: "refuse", syncClaudeAiPlugins: false, syncClaudeAiSkills: false }),
-    "--dangerously-skip-permissions", "--append-system-prompt", HEADLESS_NOTE + (s.rust ? TARGET_NOTE : ""), ...(s.model ? ["--model", s.model] : []), ...(s.effort ? ["--effort", s.effort] : []),
+    "--dangerously-skip-permissions", "--append-system-prompt", HEADLESS_NOTE, ...(s.model ? ["--model", s.model] : []), ...(s.effort ? ["--effort", s.effort] : []),
   ];
 }
 
@@ -86,26 +84,17 @@ export function systemdRunArgs(o: { unit: string; dir: string; cwd: string; memo
   ];
 }
 
-// RUSTC_WRAPPER would win over a rustc-wrapper the host or the repo set in a cargo config (kache, say), so sccache is
-// only the default for hosts that chose none.
-export function cargoWrapper(home: string, wt: string): boolean {
-  return [join(home, ".cargo"), join(wt, ".cargo")].some((d) => ["config.toml", "config"].some((f) => {
-    try { return /^\s*(build\.)?rustc-wrapper\s*=/m.test(readFileSync(join(d, f), "utf8")); } catch { return false; }
-  }));
-}
-
-export async function launch(cfg: AgentConfig, s: StartTurn, wt: string, target: string | null): Promise<TurnMeta> {
+export async function launch(cfg: AgentConfig, s: StartTurn, wt: string): Promise<TurnMeta> {
   const key = turnKey(s), dir = turnDir(cfg, key);
   mkdirSync(dir, { recursive: true });
-  const sccache = target && !cargoWrapper(process.env.HOME ?? userInfo().homedir, wt) ? Bun.which("sccache", { PATH: cfg.path }) : null;
   const mode = process.platform === "linux" ? "systemd" : "pgroup";
-  const meta: TurnMeta = { s, key, dir, wt, mode, pid: null, unit: mode === "systemd" ? `wd-${key}` : null, startedAt: Date.now(), target };
+  const meta: TurnMeta = { s, key, dir, wt, mode, pid: null, unit: mode === "systemd" ? `wd-${key}` : null, startedAt: Date.now() };
   const bin = s.runner === "pi" ? cfg.pi : cfg.claude;
   if (!bin) throw new Error(`a ${s.runner ?? "claude"} turn needs the agent's ${s.runner === "pi" ? "pi" : "claude"} binary in agent.json`);
   const envFile = envFromFile(cfg.envFile), extra = s.billing === "api" ? envFile : sessionEnv(envFile);
   const args = s.runner === "pi" ? piArgs(s, envFile.ANTHROPIC_API_KEY) : claudeArgs(s);
   writeFileSync(join(dir, "prompt.txt"), s.prompt);
-  writeFileSync(join(dir, "run.sh"), runScript(dir, bin, args, turnEnv(s, wt, { target, sccache, path: cfg.path, extra })));
+  writeFileSync(join(dir, "run.sh"), runScript(dir, bin, args, turnEnv(s, wt, { path: cfg.path, extra })));
   if (mode === "systemd") {
     if (/[$%]/.test(dir + wt)) throw new Error(`a path with "$" or "%" cannot go on a systemd-run line: ${dir} ${wt}`);
     const r = await run(["systemd-run", ...systemdRunArgs({ unit: meta.unit!, dir, cwd: wt, memoryMb: s.memoryMaxMb, seconds: s.runtimeMaxSec })]);
@@ -140,7 +129,7 @@ export function parsePs(text: string): Proc[] {
 // unless a process with that very pid exists and is not our run.sh: only then was the pid handed to something else.
 // The descendants of those count too: Claude Code runs each Bash command in a process group of its own, so the group
 // alone held only claude, never the builds and tests a turn runs. A process that outlives its parent is reparented
-// to launchd and drops out (a daemon such as sccache's server, which serves every turn anyway).
+// to launchd and drops out (a build cache's daemon, which serves every turn anyway).
 async function groupProcs(meta: TurnMeta): Promise<{ rows: Proc[]; ours: boolean }> {
   const r = await run(["ps", "-axo", "pid=,ppid=,pgid=,rss=,stat=,time=,command="], { timeout: 15_000 });
   const rows = parsePs(r.out).filter((p) => !p.stat.startsWith("Z"));

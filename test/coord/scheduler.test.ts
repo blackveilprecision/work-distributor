@@ -16,7 +16,7 @@ describe("placement", () => {
     expect(state(h, id)).toBe("running");
     const s = h.agent.started[0];
     expect(s.host).toBe("a");
-    expect(s.b).toMatchObject({ thread: id, epoch: 1, turn: 1, resume: false, ref: "main", repoUrl: "git@x:o/app.git", rust: false });
+    expect(s.b).toMatchObject({ thread: id, epoch: 1, turn: 1, resume: false, ref: "main", repoUrl: "git@x:o/app.git" });
     expect(h.db.thread(id)!.branch).toBe(`wd/${id}`);
   });
 

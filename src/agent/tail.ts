@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { EventsAck, EventsBatch, StartTurn, TurnEnd } from "../shared/types";
 import { type AgentConfig, lastChars, post, sleep } from "./config";
 import { endOf, status, stopTurn, sweep, type TurnMeta } from "./launch";
-import { pushWork, releaseTarget, type Pushed } from "./workspace";
+import { dropBuildOutput, pushWork, type Pushed } from "./workspace";
 
 export interface Active {
   meta: TurnMeta; cpuMs: number; memPeakMb: number; running: boolean; stale: boolean; done: Promise<void>;
@@ -152,6 +152,6 @@ export async function tailTurn(ctx: Ctx, a: Active): Promise<void> {
     }
   }
   writeFileSync(join(dir, "ended"), String(Date.now()));
-  releaseTarget(meta.target);
+  dropBuildOutput(meta.wt);
   ctx.active.delete(meta.key);
 }

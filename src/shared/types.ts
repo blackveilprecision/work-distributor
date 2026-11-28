@@ -94,7 +94,6 @@ export interface StartTurn {
   runner?: "claude" | "pi";            // absent = claude; pi runs the agent's `pi` binary instead of `claude`
   billing?: "api" | "session";         // session drops *_API_KEY and uses the stored login; api: the envFile's keys bill the turn (absent: session; agents before 0.4.11 read absent as api)
   memoryMaxMb: number; runtimeMaxSec: number;
-  rust: boolean;                        // lease a target dir + sccache
 }
 export interface StopTurn { thread: string; epoch: number }
 export interface Release { thread: string }       // remove worktree + tmp, release lane

@@ -138,7 +138,7 @@ describe("config", () => {
       const c = loadConfig();
       expect(c.db).toBe(homedir() + "/wd-test.sqlite");
       expect(c).toMatchObject({ listen: "127.0.0.1:7780", tickMs: 5000, stallMin: 20, lostAfterSec: 120, floors: { diskFreePct: 15, memReserveMb: 2048 } });
-      expect(c.repos["o/r"]).toMatchObject({ defaultRef: "main", requires: [], rust: false });
+      expect(c.repos["o/r"]).toMatchObject({ defaultRef: "main", requires: [] });
     } finally { if (prev === undefined) delete process.env.WD_CONFIG; else process.env.WD_CONFIG = prev; }
     expect(() => loadConfig(p.replace(".json", "-missing.json"))).toThrow();
   });
@@ -150,11 +150,11 @@ describe("hosts and repos registered at runtime", () => {
   test("repos: PUT with a slash in the id, defaults, GET, DELETE; validation and auth", async () => {
     const { call } = api();
     const put = await call("PUT", `/repos/${enc("acme/shop")}`, { url: "https://github.com/acme/shop.git" });
-    expect(put).toMatchObject({ status: 200, body: { id: "acme/shop", defaultRef: "main", requires: [], rust: false, source: "db" } });
-    await call("PUT", "/repos/acme/api", { url: "u", defaultRef: "dev", doctor: "true", requires: ["gpu"], rust: true });   // an unencoded slash works too
+    expect(put).toMatchObject({ status: 200, body: { id: "acme/shop", defaultRef: "main", requires: [], source: "db" } });
+    await call("PUT", "/repos/acme/api", { url: "u", defaultRef: "dev", doctor: "true", requires: ["gpu"] });   // an unencoded slash works too
     const list = (await call("GET", "/repos")).body as any[];
     expect(list.map((r) => r.id).sort()).toEqual(["acme/api", "acme/shop", "o/app", "o/rs"]);
-    expect(list.find((r) => r.id === "acme/api")).toMatchObject({ url: "u", defaultRef: "dev", doctor: "true", requires: ["gpu"], rust: true, source: "db" });
+    expect(list.find((r) => r.id === "acme/api")).toMatchObject({ url: "u", defaultRef: "dev", doctor: "true", requires: ["gpu"], source: "db" });
     expect(list.find((r) => r.id === "o/app").source).toBe("config");
     expect((await call("PUT", "/repos/acme%2Fshop", { url: "https://other" })).body.url).toBe("https://other");   // PUT replaces
     expect((await call("DELETE", `/repos/${enc("acme/shop")}`)).status).toBe(200);

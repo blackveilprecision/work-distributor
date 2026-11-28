@@ -59,14 +59,14 @@ test("hook prints nothing and exits 0 when the coordinator is unreachable or rej
 });
 
 test("repo add/ls/rm: the id is URL-encoded, the url defaults to GitHub", async () => {
-  expect(await cliMain(["repo", "add", "acme/shop", "--ref", "dev", "--doctor", "bun --version", "--require", "gpu", "--rust"])).toBe(0);
+  expect(await cliMain(["repo", "add", "acme/shop", "--ref", "dev", "--doctor", "bun --version", "--require", "gpu"])).toBe(0);
   expect(coord.reqs.at(-1)).toMatchObject({ method: "PUT", path: "/repos/acme%2Fshop",
-    body: { url: "https://github.com/acme/shop.git", defaultRef: "dev", doctor: "bun --version", requires: ["gpu"], rust: true } });
+    body: { url: "https://github.com/acme/shop.git", defaultRef: "dev", doctor: "bun --version", requires: ["gpu"] } });
   expect(await cliMain(["repo", "add", "acme/api", "--url", "file:///tmp/api.git"])).toBe(0);
   expect(coord.reqs.at(-1)!.body).toEqual({ url: "file:///tmp/api.git" });
   out.length = 0;
   expect(await cliMain(["repo", "ls"])).toBe(0);
-  expect(out).toEqual(["acme/shop\tu\tmain\ttrue\tgpu\trust\tdb"]);
+  expect(out).toEqual(["acme/shop\tu\tmain\ttrue\tgpu\tdb"]);
   expect(await cliMain(["repo", "rm", "acme/shop"])).toBe(0);
   expect(coord.reqs.at(-1)).toMatchObject({ method: "DELETE", path: "/repos/acme%2Fshop" });
   expect(await cliMain(["repo", "add"])).toBe(2);   // a usage mistake: exit 2 with the command's help

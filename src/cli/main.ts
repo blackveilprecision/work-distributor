@@ -238,23 +238,22 @@ const repo = defineCommand({
         ref: { type: "string", valueHint: "branch", description: "Default base branch (default main)" },
         doctor: { type: "string", valueHint: "command", description: "Shell command a host must pass in a checkout before it gets this repo's threads, e.g. \"bun --version\"" },
         require: { type: "string", valueHint: "label", description: "Host label every thread of this repo needs; repeat for several" },
-        rust: { type: "boolean", description: "Rust repo: shared target dirs per host, and sccache when installed" },
         ...caller,
       },
       async run({ args, rawArgs }) {
         const requires = many(rawArgs, "require");
         const r = await call(cfgOf(args), "PUT", `/repos/${encodeURIComponent(args.id)}`, {
-          url: args.url ?? `https://github.com/${args.id}.git`, defaultRef: args.ref, doctor: args.doctor, requires: requires.length ? requires : undefined, rust: args.rust || undefined });
+          url: args.url ?? `https://github.com/${args.id}.git`, defaultRef: args.ref, doctor: args.doctor, requires: requires.length ? requires : undefined });
         json(r);
         if (r.source === "config") console.error(`wd: ${args.id} is defined in coord.json, which wins: nothing was changed`);
       },
     }),
     ls: defineCommand({
-      meta: { name: "ls", description: "List registered repos: id, url, default ref, doctor, required labels, rust, source (db or config)." },
+      meta: { name: "ls", description: "List registered repos: id, url, default ref, doctor, required labels, source (db or config)." },
       args: { ...caller },
       async run({ args }) {
         for (const r of (await call(cfgOf(args), "GET", "/repos")) as any[])
-          console.log([r.id, r.url, r.defaultRef, r.doctor ?? "", r.requires.join(","), r.rust ? "rust" : "", r.source].join("\t"));
+          console.log([r.id, r.url, r.defaultRef, r.doctor ?? "", r.requires.join(","), r.source].join("\t"));
       },
     }),
     rm: defineCommand({

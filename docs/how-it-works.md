@@ -54,7 +54,7 @@ When an agent reports a `rate_limit_event` with status `rejected`, all new start
 
 ## Running a turn (agent)
 1. Fetch or clone the mirror at `~/.wd/repos/<owner>__<repo>.git`, then create or reuse the worktree at `~/.wd/wt/<thread>`.
-2. For repos marked `rust`, lease a target directory from a pool of `targetDirPool` per repo, and set `RUSTC_WRAPPER=sccache` if sccache is installed and no cargo config the turn reads (`~/.cargo/config.toml` or the repo's `.cargo/config.toml`) already names a `rustc-wrapper`: the variable would override that choice (kache, for one). Cargo calls a workspace crate fresh when no source file is newer than its last build, and the build's place in the target dir does not depend on the worktree's path. So when a dir was last used by another worktree, every tracked file of this one is touched first, or cargo could reuse a crate built later from other sources. Rust turns are also told in the appended note to give any extra git worktree its own `CARGO_TARGET_DIR`.
+2. Builds run in the worktree, with the host's own tool config: a compiler cache (kache, sccache) is set up there, in `~/.cargo/config.toml` for cargo, not by wd. wd has no per-language settings.
 3. Write `~/.wd/turns/<thread>-<epoch>-<turn>/run.sh`. It runs `claude` under `env -i` with this fixed environment:
    - HOME, USER, LOGNAME, `SHELL=/bin/bash`;
    - PATH: `path` from `agent.json`, or else the PATH an interactive login shell of the host user prints (`$SHELL -lic`, bash or zsh), read once when the agent starts, followed by the service's own. Tools that add themselves only in `~/.bashrc` or `~/.zshrc` (bun, nvm) are found this way;
@@ -71,7 +71,7 @@ When an agent reports a `rate_limit_event` with status `rejected`, all new start
    ```
 4. Start it:
    - **Linux:** as `systemd-run --user --unit wd-<thread>-<epoch>-<turn>` with `MemoryMax` and `RuntimeMaxSec`. CPU and peak memory come from the unit, plus what the turn started outside it: processes whose working directory is in the turn's worktree, and their descendants (an `hc run` terminal is started by the hc server, outside the unit). Those are measured every 5 s but not moved into the unit, so the unit's end does not kill work the thread left running on purpose, and the memory cap does not cover them.
-   - **macOS:** in its own process group, with a wall-clock limit. The turn is that group and every descendant of it, since Claude Code runs each Bash command in a process group of its own; CPU and memory are sampled from all of them, and stopping the turn kills all of them. A process whose parent exits is reparented to launchd and drops out (sccache's server, for one).
+   - **macOS:** in its own process group, with a wall-clock limit. The turn is that group and every descendant of it, since Claude Code runs each Bash command in a process group of its own; CPU and memory are sampled from all of them, and stopping the turn kills all of them. A process whose parent exits is reparented to launchd and drops out (a compiler cache's daemon, for one).
 
    Turns outlive agent restarts.
 5. Tail `out.jsonl` from a saved byte offset. Lines can be any length; each is cut to 8000 characters after it is read. Batches go to the coordinator, and the offset only moves forward to what the coordinator committed, so every event is stored once, with the time its batch arrived. `GET /threads/:id/steps` and the `activity` in `GET /queue` summarise them: a tool call by its main input (`Bash: bun test`), text on one line, a result as `↳ ...`.
@@ -79,6 +79,7 @@ When an agent reports a `rate_limit_event` with status `rejected`, all new start
    - read the `result` line (`is_error`, result text, cumulative cost);
    - commit anything left uncommitted ("wd: uncommitted work at end of turn"), authored by the git identity the worktree has configured, like the worker's own commits (`wd <wd@localhost>` only when none is set);
    - if the branch is ahead of its base, push it with `--force-with-lease`, using the token in `gitTokenFile`. While a turn runs, the branch is also pushed every 10 min;
+   - remove the worktree's `target/` (build output, often gigabytes; a worktree stays up to a day after its last turn). A follow-up turn rebuilds it, from the host's compiler cache when there is one;
    - send the turn end. It is retried until the coordinator accepts it.
 
 The `/start` request returns at once; cloning and launching happen in the background. A launch failure becomes a `launch-failed` turn end.
@@ -120,8 +121,8 @@ Reports stay until acknowledged. There are four ways to get them:
 | Coordinator restart | nothing: agents buffer and resend events and turn ends; CLI and tool calls retry a refused connection for 20 seconds; the report stream reconnects |
 
 ## Cleanup
-- **Release:** `release`, an expired TTL, or a final thread 24 h old makes the agent remove the worktree and its tmp dir and free its target lease. The branch on origin stays. A `release` writes no report: the caller asked for it. A TTL expiry does write a `final` one.
-- **Orphan sweep:** at start and every 6 h, each agent asks the coordinator which threads are still live. It then removes worktrees, turn dirs and leases that belong to no live thread, are more than 24 h old and have no running process. If the coordinator can't be reached, the sweep does nothing.
+- **Release:** `release`, an expired TTL, or a final thread 24 h old makes the agent remove the worktree and its tmp dir. The branch on origin stays. A `release` writes no report: the caller asked for it. A TTL expiry does write a `final` one.
+- **Orphan sweep:** at start and every 6 h, each agent asks the coordinator which threads are still live. It then removes worktrees and turn dirs that belong to no live thread, are more than 24 h old and have no running process. It also removes the shared Rust target dirs of agents before 0.4.13 (`<dataDir>/target`) once no running turn uses them. If the coordinator can't be reached, the sweep does nothing.
 
 ## Host checks
 Every heartbeat (15 s) carries the agent's probe:
@@ -152,7 +153,7 @@ All routes take `authorization: Bearer <token>`.
 
 ### Registering hosts and repos
 Hosts and repos can be listed in `coord.json` or registered through the caller API; the coordinator keeps the registered ones in its database. The scheduler and the agent authentication read the merged set on every use, so a registration works at once, with no restart. When an id is in both, `coord.json` wins.
-- `PUT /repos/:id` with `{url, defaultRef?, doctor?, requires?, rust?}` replaces the repo and returns it with `source` (`db`, or `config` when `coord.json` has the id, in which case nothing changes). `defaultRef` is `main` by default. Changing a repo clears its stored doctor results. `DELETE` removes it (409 for a `coord.json` repo). A thread already queued or idle for a removed repo fails with "no longer configured".
+- `PUT /repos/:id` with `{url, defaultRef?, doctor?, requires?}` replaces the repo and returns it with `source` (`db`, or `config` when `coord.json` has the id, in which case nothing changes). `defaultRef` is `main` by default. Changing a repo clears its stored doctor results. `DELETE` removes it (409 for a `coord.json` repo). A thread already queued or idle for a removed repo fails with "no longer configured".
 - `PUT /hosts/:name` with `{url}` (the agent's `http://host:7781`) generates a host token and returns `{name, url, token, source}`. A second `PUT` keeps the token and updates the url, but does not return the token; `{rotate: true}` replaces it and returns the new one. A token is only ever returned when it was just created or rotated. For a `coord.json` host it returns `{name, url, source: "config"}` (no token) and changes nothing. The caller token is an admin credential: it can register, rotate and repoint hosts. `DELETE` removes the registration and the host's state (409 for a `coord.json` host, or while a turn runs on it).
 - `wd repo add|ls|rm` and `wd host install` use these routes.
 
@@ -172,7 +173,7 @@ Hosts and repos can be listed in `coord.json` or registered through the caller A
 | `db` | `~/.local/share/wd/wd.sqlite` | database file |
 | `callerToken` | required | token for submitters |
 | `hosts.<name>` | | `{url, token, labels?, maxThreads?}`; labels and `maxThreads` normally come from the agent. Optional: hosts can be registered through the API |
-| `repos.<owner/name>` | | `{url, defaultRef, doctor?, requires?, rust?}`. Optional: repos can be registered through the API |
+| `repos.<owner/name>` | | `{url, defaultRef, doctor?, requires?}`. Optional: repos can be registered through the API |
 | `floors` | `{diskFreePct: 15, memReserveMb: 2048, cpuOversub: 1.5}` | placement floors; `cpuOversub` is how far past its cores a host may be committed |
 | `tickMs`, `lostAfterSec`, `asleepLostSec`, `stallMin`, `runtimeMaxSec` | 5000, 120, 21600, 20, 14400 | timings |
 
@@ -185,7 +186,7 @@ Hosts and repos can be listed in `coord.json` or registered through the caller A
 | `claude` | `claude` | path to the CLI |
 | `labels` | `[]` | labels threads can require, besides the host's name |
 | `maxThreads` | none | optional cap on concurrent turns; without it memory and CPU decide |
-| `dataDir` | `~/.wd` | mirrors, worktrees, turns, target dirs |
+| `dataDir` | `~/.wd` | mirrors, worktrees, turns |
 | `gitTokenFile` | | GitHub token used for pushes |
 | `envFile` | | KEY=value lines added to every turn's environment; `*_API_KEY` entries only for threads with `--billing api` (see below); keep it mode 600 |
 | `pi` | | the pi coding agent, for threads submitted with `--runner pi` |
@@ -199,7 +200,6 @@ A thread's `effort` (`low` to `max`, optional) becomes claude's `--effort` or pi
 
 Billing is `session` by default: the runner's stored subscription login pays. For claude every `*_API_KEY` from the envFile is dropped from the turn environment (so the stored OAuth credential pays), and the login check runs the same way, so it checks the subscription itself; for pi on an `anthropic/*` model no `--api-key` is passed (pi's own auth store pays). `--billing api` bills a thread to the envFile's keys instead: they join the turn environment, and a pi `anthropic/*` model gets `--api-key` from `ANTHROPIC_API_KEY`. The coordinator always sends the setting, because agents before 0.4.11 read a missing one as `api`. The usage-limit hold only ever blocks session-billed starts: an api-billed thread never arms it and never waits on it.
 | `path` | the login shell's PATH | PATH for doctors and turns |
-| `targetDirPool` | 4 | Rust target dirs per repo |
 | `autoUpdate` | true | update to the coordinator's release (see below) |
 
 **Agent updates:** each heartbeat reply carries the coordinator's version. An agent on an older release downloads that release's binary for its platform from GitHub (`WD_RELEASES` overrides the base URL), checks it prints the version, renames it over its own binary and exits; systemd or launchd starts the new one, and running turns carry on. It waits while a worktree is being prepared, and a failed download is retried 10 minutes later. Agents run from source, and agents with `"autoUpdate": false`, never update. So deploying a release is `wd coord install`; the hosts follow within a heartbeat.

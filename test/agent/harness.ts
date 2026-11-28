@@ -76,7 +76,7 @@ export async function harness(over: Partial<AgentConfig> = {}) {
   coord.up();
   const cfg: AgentConfig = {
     name: "testhost", listen: "127.0.0.1:0", coordUrl: coord.url, token: "tok", dataDir: join(root, "data"), claude,
-    labels: [], maxThreads: 4, targetDirPool: 2, heartbeatSec: 3600, tailMs: 40, pushEverySec: 3600, path: process.env.PATH, ...over,
+    labels: [], maxThreads: 4, heartbeatSec: 3600, tailMs: 40, pushEverySec: 3600, path: process.env.PATH, ...over,
   };
   const agents: Awaited<ReturnType<typeof startAgent>>[] = [];
   const spawn = async () => { const a = await startAgent(cfg); agents.push(a); return a; };
@@ -87,7 +87,7 @@ export async function harness(over: Partial<AgentConfig> = {}) {
   };
   const turn = (o: Partial<StartTurn> = {}): StartTurn => ({
     thread: "t1", epoch: 1, turn: 1, repoUrl: origin, repoId: "acme/app", ref: "main", branch: "wd/t1", sessionId: crypto.randomUUID(),
-    resume: false, prompt: "hello", memoryMaxMb: 1024, runtimeMaxSec: 60, rust: false, ...o,
+    resume: false, prompt: "hello", memoryMaxMb: 1024, runtimeMaxSec: 60, ...o,
   });
   return {
     root, origin, cfg, coord, call, turn, get agent() { return agent },

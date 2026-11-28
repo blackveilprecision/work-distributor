@@ -53,12 +53,17 @@ export async function sweepOrphans(ctx: Ctx): Promise<string[]> {
     rmSync(join(turns, n), { recursive: true, force: true });
     did(`turn dir ${n}`);
   }
+  // The shared Rust target dirs of agents before 0.4.13 (<dataDir>/target/<repo>/<k>): each goes once no running turn
+  // holds its lease, whatever the coordinator says, since nothing leases them any more.
   const targets = join(cfg.dataDir, "target");
-  for (const repo of ls(targets)) for (const n of ls(join(targets, repo)).filter((n) => n.endsWith(".lock"))) {
-    const lock = join(targets, repo, n), keyFile = join(lock, "key");
-    if (!(await orphan(threadOf(existsSync(keyFile) ? readFileSync(keyFile, "utf8") : ""), lock))) continue;
-    rmSync(lock, { recursive: true, force: true });
-    did(`target lease ${repo}/${n.slice(0, -5)}`);
+  for (const repo of ls(targets)) {
+    for (const n of new Set(ls(join(targets, repo)).map((n) => n.replace(/\.lock$/, "")))) {
+      const dir = join(targets, repo, n), keyFile = join(dir + ".lock", "key");
+      if (existsSync(keyFile) && (await busy(ctx, threadOf(readFileSync(keyFile, "utf8"))))) continue;
+      rmSync(dir, { recursive: true, force: true }); rmSync(dir + ".lock", { recursive: true, force: true });
+      did(`old target dir ${repo}/${n}`);
+    }
+    if (!ls(join(targets, repo)).length) rmSync(join(targets, repo), { recursive: true, force: true });
   }
   // A worktree being added would look half-made to prune, so it waits for the next sweep.
   const repos = join(cfg.dataDir, "repos");

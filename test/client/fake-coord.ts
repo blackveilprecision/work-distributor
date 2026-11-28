@@ -52,7 +52,7 @@ export function fakeCoord(token = "tok") {
       if (u.pathname === "/threads") return Response.json(Array.from({ length: 60 }, (_, i) =>
         ({ id: `t${i}`, tag: null, state: "done", host: "box1", turns: 1, reason: null, prompt: "p".repeat(5000), lastMessage: "m".repeat(4000) })));
       if (u.pathname === "/hosts") return Response.json([]);
-      if (u.pathname === "/repos" && req.method === "GET") return Response.json([{ id: "acme/shop", url: "u", defaultRef: "main", doctor: "true", requires: ["gpu"], rust: true, source: "db" }]);
+      if (u.pathname === "/repos" && req.method === "GET") return Response.json([{ id: "acme/shop", url: "u", defaultRef: "main", doctor: "true", requires: ["gpu"], source: "db" }]);
       if (u.pathname.startsWith("/repos/")) return Response.json({ ...body, source: u.pathname.endsWith("o%2Fcfg") ? "config" : "db" });
       return Response.json({ path: u.pathname, body });
   }

@@ -7,7 +7,7 @@ import { launch, readMeta, stopTurn, turnDir, turnKey } from "./launch";
 import { probe } from "./probe";
 import { SWEEP_EVERY_MS, sweepOrphans } from "./sweep";
 import { type Active, type Ctx, tailTurn } from "./tail";
-import { claimTarget, ensureMirror, git, leaseTarget, prepareWorktree, releaseTarget, releaseWorktree, wtPath } from "./workspace";
+import { ensureMirror, git, prepareWorktree, releaseWorktree, wtPath } from "./workspace";
 
 export { VERSION } from "../shared/version";
 import { replaceBinary, wantUpdate } from "./update";
@@ -33,14 +33,10 @@ async function start(ctx: Ctx, s: StartTurn): Promise<void> {
   if (s.resume && !existsSync(wtPath(cfg, s.thread))) throw new Error(`worktree for ${s.thread} is gone, cannot resume`);
   ctx.preparing.set(key, s);
   void (async () => {
-    let target: string | null = null;
     try {
       const wt = await prepareWorktree(cfg, s);
-      target = s.rust ? leaseTarget(cfg, s.repoId, key, (k) => ctx.active.has(k)) : null;
-      if (target) await claimTarget(target, wt);
-      track(ctx, await launch(cfg, s, wt, target));
+      track(ctx, await launch(cfg, s, wt));
     } catch (e) {
-      releaseTarget(target);
       rmSync(dir, { recursive: true, force: true });
       await failStart(ctx, s, (e as Error).message);
     } finally {

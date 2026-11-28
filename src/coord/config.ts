@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { existsSync, readFileSync } from "node:fs";
 
 export interface HostCfg { url: string; token: string; labels?: string[]; maxThreads?: number }
-export interface RepoCfg { url: string; defaultRef: string; doctor?: string; requires: string[]; rust: boolean }
+export interface RepoCfg { url: string; defaultRef: string; doctor?: string; requires: string[] }
 export interface Config {
   listen: string; db: string; callerToken: string;
   hosts: Record<string, HostCfg>; repos: Record<string, RepoCfg>;
@@ -13,7 +13,7 @@ export interface Config {
 
 export const expand = (p: string) => (p === "~" || p.startsWith("~/") ? homedir() + p.slice(1) : p);
 
-export const parseRepo = (r: any): RepoCfg => ({ url: r.url, defaultRef: r.defaultRef ?? "main", doctor: r.doctor, requires: r.requires ?? [], rust: !!r.rust });
+export const parseRepo = (r: any): RepoCfg => ({ url: r.url, defaultRef: r.defaultRef ?? "main", doctor: r.doctor, requires: r.requires ?? [] });
 
 export function parseConfig(raw: any): Config {
   if (!raw?.callerToken) throw new Error("coord config: callerToken is required");

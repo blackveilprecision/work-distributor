@@ -1,4 +1,4 @@
-// Mirror, worktrees, pushing and the rust target-dir pool. All git runs with a fixed env so a host's own git config
+// Mirror, worktrees, pushing and build output. All git runs with a fixed env so a host's own git config
 // or askpass prompts can never hang a turn.
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -109,52 +109,8 @@ export async function releaseWorktree(cfg: AgentConfig, thread: string): Promise
   if (mirror) await git(cfg, mirror, ["worktree", "prune"]);
 }
 
-// ---- rust target dir pool: <dataDir>/target/<repo>/<k>, leased with a lock dir ----
-
-// Prefers the warmest free dir (most recently used); creates a new one only while the pool is under its cap.
-// A lock whose turn is no longer live is taken over, so a crashed agent never leaks a slot.
-export function leaseTarget(cfg: AgentConfig, repoId: string, key: string, live: (key: string) => boolean): string | null {
-  const pool = join(cfg.dataDir, "target", flat(repoId));
-  mkdirSync(pool, { recursive: true });
-  const free: { dir: string; at: number }[] = [];
-  for (let k = 0; k < cfg.targetDirPool; k++) {
-    const dir = join(pool, String(k)), lock = dir + ".lock";
-    if (existsSync(lock)) {
-      const holder = existsSync(join(lock, "key")) ? readFileSync(join(lock, "key"), "utf8") : "";
-      if (live(holder)) continue;
-      rmSync(lock, { recursive: true, force: true });
-    }
-    free.push({ dir, at: existsSync(dir) ? statSync(dir).mtimeMs : -1 });
-  }
-  free.sort((a, b) => b.at - a.at);
-  for (const f of free) {
-    try { mkdirSync(f.dir + ".lock"); } catch { continue; }
-    writeFileSync(join(f.dir + ".lock", "key"), key);
-    mkdirSync(f.dir, { recursive: true });
-    return f.dir;
-  }
-  return null;
+// Build output left in the worktree (cargo's target/, for one) can take gigabytes, and a worktree stays a day after its
+// last turn. It goes when a turn ends: a follow-up rebuilds it, from the host's compiler cache when it has one.
+export function dropBuildOutput(wt: string) {
+  if (existsSync(join(wt, "target"))) rmSync(join(wt, "target"), { recursive: true, force: true });
 }
-// Cargo calls a workspace crate fresh when no source file is newer than its last build, and the build's name in the
-// target dir does not depend on the worktree's path. So a dir last used by another worktree can hold a crate built
-// later than this worktree's (different) sources, and cargo would reuse it: a gate passing or failing on the wrong
-// code. When the dir changes worktree, every tracked file here is touched, and the first build recompiles the
-// workspace's own crates (the compiler cache makes that cheap). Registry crates are keyed by version and stay.
-export async function claimTarget(dir: string, wt: string) {
-  const mark = join(dir, ".wd-worktree");
-  if (existsSync(mark) && readFileSync(mark, "utf8") === wt) return;
-  const r = await run(["git", "-C", wt, "ls-files", "-z"], { timeout: 60_000 });
-  if (!r.ok) throw new Error(`git ls-files: ${r.err.slice(0, 200)}`);
-  const now = new Date();
-  for (const f of r.out.split("\0")) if (f) try { utimesSync(join(wt, f), now, now); } catch {}
-  writeFileSync(mark, wt);
-}
-export function releaseTarget(dir: string | null) {
-  if (!dir) return;
-  try { utimesSync(dir, new Date(), new Date()); } catch {}
-  rmSync(dir + ".lock", { recursive: true, force: true });
-}
-export const poolSize = (cfg: AgentConfig, repoId: string) => {
-  const pool = join(cfg.dataDir, "target", flat(repoId));
-  return existsSync(pool) ? readdirSync(pool).filter((n) => !n.endsWith(".lock")).length : 0;
-};
