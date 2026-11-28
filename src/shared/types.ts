@@ -54,7 +54,6 @@ export interface HostView {
   cores: number; memTotalMb: number; memAvailMb: number; diskFreePct: number;
   load1: number;               // 1-minute load average: every process on the host, wd's or not
   cpuScore: number | null;     // single-core benchmark, the best seen (agent/probe.ts): relative host speed
-  cpuPromisedCores: number;    // CPU promised to running turns and not in use yet
   running: number; maxThreads: number | null;   // null: no cap, memory and CPU decide
   claudeVersion: string | null; loginExpiresAt: number | null; lastSeenAt: number | null;
   piVersion: string | null; piOk: boolean; piError: string | null;   // the pi runner's readiness (nulls before 0.4.8)
@@ -67,7 +66,7 @@ export interface HostView {
 export interface QueueEntry { id: string; caller: string; repo: string; tag: string | null; host: string | null; since: number; waiting: string | null }
 export interface QueueView {
   holdUntil: number | null;                                    // usage-limit hold on all new starts
-  queued: (QueueEntry & { priority: boolean; estimateMb: number; estimateCores: number; prompt: string })[];   // in placement order; prompt cut at 500 chars
+  queued: (QueueEntry & { priority: boolean; estimateMb: number; holds: string | null; prompt: string })[];   // holds: the host kept for it   // in placement order; prompt cut at 500 chars
   followUps: (QueueEntry & { count: number; texts: string[] })[];   // sends waiting to start a turn on their thread's host, each cut at 500
   // Finished a turn, worktree kept for a follow-up or a release; not using a slot. lastMessage cut at 600 chars.
   idle: { id: string; caller: string; repo: string; tag: string | null; host: string | null; since: number; turns: number; lastMessage: string | null }[];

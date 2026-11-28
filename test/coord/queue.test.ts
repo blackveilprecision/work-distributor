@@ -83,7 +83,7 @@ describe("GET /queue", () => {
     const text = queueText(body);
     expect(text).toContain(`queued (1)\n  ${q2}  o/app  -  orch:x`);
     expect(text).toContain("a: full 1/1");
-    expect(text).toMatch(new RegExp(`  a  ok  1/1  cpu=0\\.5/8  mem=16000/32768MB  disk=50%\\n    ${id}  o/app  T  orch:x  turn 1  `));
+    expect(text).toMatch(new RegExp(`  a  ok  1/1  cpu=0\\.0/8  mem=16000/32768MB  disk=50%\\n    ${id}  o/app  T  orch:x  turn 1  `));
   });
 
   test("what a click opens: each host's eligibility per repo, a follow-up's waiting text, a queued prompt, and idle threads", async () => {

@@ -45,12 +45,10 @@ export function httpAgent(hostCfg: (name: string) => HostCfg | undefined): Agent
 
 const DAY = 86_400_000;
 const DEFAULT_MB = { small: 2048, heavy: 8192 };
-const DEFAULT_CORES = { small: 0.5, heavy: 2 };
-const CPU_WINDOW_MS = 60_000;
-const CPU_PROMISE_MS = 10 * 60_000;   // how long a new turn is promised the CPU it has not used yet   // a turn's CPU rate is measured over windows this long, so a one-minute build burst counts
 const p90 = (v: number[]) => (v.sort((a, b) => a - b), v.length ? v[Math.ceil(0.9 * v.length) - 1] : 0);
-export type Est = { mb: number; cores: number };
+export type Est = { mb: number };
 type Fit = { score: number; freeMb: number };
+type Hold = { host: string; thread: string };
 const RESUME_PROMPT = "You were interrupted by a host restart. Continue where you left off.";
 const ISFINAL = (s: string) => FINAL.includes(s as ThreadState);
 
@@ -144,12 +142,6 @@ export class Scheduler {
       if (!cur || cur.ended) continue;
       this.db.run("UPDATE turns SET mem_peak=MAX(mem_peak,?), cpu_ms=?, last_activity=? WHERE thread=? AND n=?",
         u.memPeakMb, u.cpuMs, u.cpuMs !== cur.cpu_ms ? now : cur.last_activity, u.thread, u.turn);
-      if (cur.cpu_at === null) this.db.run("UPDATE turns SET cpu_at=?, cpu_base=? WHERE thread=? AND n=?", now, u.cpuMs, u.thread, u.turn);
-      else if (now - cur.cpu_at >= CPU_WINDOW_MS) {
-        // Never more than the host's cores: a counter that restarts can still report a jump.
-        const rate = Math.min(Math.max(0, u.cpuMs - cur.cpu_base) / (now - cur.cpu_at), p.cores || Infinity);
-        this.db.run("UPDATE turns SET cpu_rate=?, cpu_peak=MAX(cpu_peak,?), cpu_at=?, cpu_base=? WHERE thread=? AND n=?", rate, rate, now, u.cpuMs, u.thread, u.turn);
-      }
     }
     return { stop, version: VERSION };
   }
@@ -198,12 +190,8 @@ export class Scheduler {
     const now = this.now(), r = b.result, total = Math.max(t.cost, r?.totalCostUsd ?? 0);
     // Wall time: claude's duration_ms leaves out time spent in tools.
     const cost = total - t.cost, secs = (now - u.started) / 1000;
-    // The last partial window counts if it was at least a quarter of one; a turn shorter than that counts its average.
-    const cores = (JSON.parse(this.db.host(b.host)?.hb ?? "{}") as Partial<Heartbeat>).probe?.cores || Infinity;
-    const part = u.cpu_at !== null && now - u.cpu_at >= CPU_WINDOW_MS / 4 ? Math.max(0, u.cpu_ms - u.cpu_base) / (now - u.cpu_at) : 0;
-    const cpuPeak = Math.min(cores, Math.max(u.cpu_peak, part, u.cpu_peak || part ? 0 : u.cpu_ms / Math.max(now - u.started, 1)));
-    this.db.run("UPDATE turns SET ended=?, kind=?, cost=?, mem_peak=?, result=?, cpu_peak=? WHERE thread=? AND n=?",
-      now, b.kind, cost, b.kind === "oom" ? Math.max(b.memPeakMb, u.mem_max) : b.memPeakMb, r?.text ?? null, cpuPeak, b.thread, b.turn);
+    this.db.run("UPDATE turns SET ended=?, kind=?, cost=?, mem_peak=?, result=? WHERE thread=? AND n=?",
+      now, b.kind, cost, b.kind === "oom" ? Math.max(b.memPeakMb, u.mem_max) : b.memPeakMb, r?.text ?? null, b.thread, b.turn);
     this.db.setThread(b.thread, { head: b.head ?? t.head, cost: total, last_message: r?.text ? r.text.slice(0, 4000) : t.last_message });
     const o: Partial<Report> = { message: r?.text ?? null, pushed: b.pushed, head: b.head ?? t.head, turnCostUsd: cost, turnSeconds: secs };
     const tail = b.stderrTail.slice(-1000);
@@ -266,13 +254,10 @@ export class Scheduler {
   // cannot shrink a heavy thread's estimate.
   estimate(t: Pick<ThreadRow, "repo" | "size">): Est {
     const size = t.size === "heavy" ? "heavy" : "small";
-    const rows = this.db.all<{ mem_peak: number; cpu_peak: number }>(
-      `SELECT u.mem_peak, u.cpu_peak FROM turns u JOIN threads x ON x.id=u.thread
+    const rows = this.db.all<{ mem_peak: number }>(
+      `SELECT u.mem_peak FROM turns u JOIN threads x ON x.id=u.thread
        WHERE x.repo=? AND COALESCE(x.size,'small')=? AND u.ended IS NOT NULL AND u.mem_peak>0 ORDER BY u.started DESC LIMIT 20`, t.repo, size);
-    return {
-      mb: Math.max(p90(rows.map((r) => r.mem_peak)), DEFAULT_MB[size]),
-      cores: Math.round(Math.max(p90(rows.filter((r) => r.cpu_peak > 0).map((r) => r.cpu_peak)), DEFAULT_CORES[size]) * 100) / 100,
-    };
+    return { mb: Math.max(p90(rows.map((r) => r.mem_peak)), DEFAULT_MB[size]) };
   }
 
 
@@ -287,8 +272,8 @@ export class Scheduler {
     const claimed = this.db.tx(() => {
       const r = this.db.run("UPDATE threads SET state='running',host=?,epoch=?,turns=?,reason=NULL,updated=? WHERE id=? AND state=? AND epoch=?", host, epoch, n, now, t.id, back, t.epoch);
       if (r.changes === 0) return false;
-      this.db.run("INSERT INTO turns(thread,n,epoch,host,started,est_mb,mem_max,last_activity,est_cpu,cpu_at,cpu_base) VALUES(?,?,?,?,?,?,?,?,?,?,0)",
-        t.id, n, epoch, host, now, est.mb, memMax, now, Math.min(est.cores, probe?.cores || Infinity), now);   // promised: what this host can give
+      this.db.run("INSERT INTO turns(thread,n,epoch,host,started,est_mb,mem_max,last_activity) VALUES(?,?,?,?,?,?,?,?)",
+        t.id, n, epoch, host, now, est.mb, memMax, now);
       return true;
     });
     if (!claimed) return "skipped";
@@ -380,17 +365,8 @@ export class Scheduler {
     }
   }
 
-  // An optional cap; without one, memory and CPU decide how many turns a host runs.
+  // An optional cap; without one, memory decides how many turns a host runs.
   maxThreads(h: HostRow): number | null { return (JSON.parse(h.hb) as Heartbeat).maxThreads ?? this.hostCfg(h.name)?.maxThreads ?? null; }
-
-  // CPU (cores) promised to running turns and not in use yet: the estimate less the last measured rate, for a turn's
-  // first CPU_PROMISE_MS only. That covers turns placed together before their builds show in the load average; after
-  // it the load average shows what a turn really uses. A turn that mostly waits holding its busiest minute for hours
-  // would keep a host to one thread. Contention only slows turns, so this is not done for memory.
-  promisedCores(host: string): number {
-    return this.db.get<{ s: number | null }>("SELECT SUM(MAX(est_cpu-cpu_rate,0)) s FROM turns WHERE host=? AND ended IS NULL AND started>?",
-      host, this.now() - CPU_PROMISE_MS)!.s ?? 0;
-  }
 
   private doctors() {
     const now = this.now();
@@ -411,7 +387,8 @@ export class Scheduler {
 
   // The memory host h would have left after starting thread t, or why it cannot start it now.
   // A reason string when the thread cannot start there now, else how well it would run there.
-  private fit(t: Pick<ThreadRow, "repo" | "requires" | "runner">, est: Est, h: HostRow): Fit | string {
+  // back: memory counted as free on top of what the host has now (what its running turns would give back).
+  private fit(t: Pick<ThreadRow, "repo" | "requires" | "runner">, est: Est, h: HostRow, back = 0): Fit | string {
     if (h.state !== "ok") return h.reason ? `${h.state}: ${h.reason}` : h.state;
     const repo = this.repo(t.repo), need: string[] = [...JSON.parse(t.requires), ...(repo?.requires ?? [])];   // no repo: launch fails the thread
     const hb = JSON.parse(h.hb) as Heartbeat, p = hb.probe, labels = [h.name, ...(hb.labels ?? this.hostCfg(h.name)?.labels ?? [])], f = this.cfg.floors;   // a host's name is a label, so requires can pin a host
@@ -430,28 +407,21 @@ export class Scheduler {
     // the last probe says: a build that peaks twenty minutes in must not find its memory handed to another thread.
     const reserved = this.db.get<{ s: number | null }>(
       "SELECT SUM(MAX(est_mb-mem_peak,0)) s FROM turns WHERE host=? AND ended IS NULL", h.name)!.s ?? 0;
-    const freeMb = p.memAvailMb - reserved - est.mb;
-    if (freeMb < f.memReserveMb) return `memory ${p.memAvailMb - reserved} MB free, needs ${est.mb}+${f.memReserveMb}`;
-    // CPU: the load average counts everything running there (also work a turn started outside itself, and the owner's),
-    // and turns that have not reached their build yet still hold what they were promised. Contention only slows turns
-    // down, so a host may be committed past its cores, up to cpuOversub times them.
+    const freeMb = p.memAvailMb + back - reserved - est.mb;
+    if (freeMb < f.memReserveMb) return `memory ${p.memAvailMb + back - reserved} MB free, needs ${est.mb}+${f.memReserveMb}`;
+    // CPU never stops a start, as in Kubernetes: a build spreads over whatever cores are free, contention only slows it,
+    // and on Linux each turn is a systemd unit of its own, so busy turns get equal shares whatever their thread counts.
+    // CPU only ranks hosts: single-core speed times the idle share, split over the turns already there.
     if (!p.cores) return { score: 0, freeMb };
-    // A turn cannot use more cores than the host has: an estimate measured on a bigger host asks for all of these,
-    // and runs slower here rather than never.
-    const committed = (p.load1 ?? 0) + this.promisedCores(h.name), cores = Math.min(est.cores, p.cores);
-    if (committed + cores > p.cores * f.cpuOversub)
-      return `cpu ${committed.toFixed(1)} of ${p.cores} cores busy or promised, needs ${cores}`;
-    // How fast it would run: single-core speed times the share of the cores it wants that are free (of the whole
-    // estimate, so a host that can give all of it ranks above one that can give part).
-    const share = Math.min(1, Math.max(0.1, (p.cores - committed) / est.cores));
-    return { score: (p.cpuScore ?? 1) * share, freeMb };
+    return { score: ((p.cpuScore ?? 1) * Math.max(0.05, 1 - (p.load1 ?? 0) / p.cores)) / (1 + run), freeMb };
   }
 
 
-  // The host it would run fastest on; within 5% of that, the one with the most memory to spare.
-  private pick(t: ThreadRow, est: Est): string | null {
+  // The host it would run fastest on; within 5% of that, the one with the most memory to spare. A held host is skipped.
+  private pick(t: ThreadRow, est: Est, hold: Hold | null): string | null {
     let best: (Fit & { name: string }) | null = null;
     for (const h of this.db.all<HostRow>("SELECT * FROM hosts WHERE state='ok'")) {
+      if (h.name === hold?.host) continue;
       const f = this.fit(t, est, h);
       if (typeof f === "string") continue;
       const near = best && Math.abs(f.score - best.score) <= 0.05 * Math.max(f.score, best.score);
@@ -461,12 +431,34 @@ export class Scheduler {
   }
 
 
+  // Backfill as in Slurm, without run times: the first queued thread that fits nowhere holds the host whose running
+  // turns would give it room when they end, and no later thread starts there until it has. Small work flows past it
+  // on every other host, and a heavy thread is never starved by a stream of small ones.
+  private holdFor(t: ThreadRow, est: Est): Hold | null {
+    let best: { host: string; freeMb: number } | null = null;
+    for (const h of this.db.all<HostRow>("SELECT * FROM hosts WHERE state='ok'")) {
+      const back = this.db.get<{ s: number | null }>("SELECT SUM(mem_peak) s FROM turns WHERE host=? AND ended IS NULL", h.name)!.s ?? 0;
+      const f = back ? this.fit(t, est, h, back) : "nothing to wait for";
+      if (typeof f !== "string" && (!best || f.freeMb > best.freeMb)) best = { host: h.name, freeMb: f.freeMb };
+    }
+    return best && { host: best.host, thread: t.id };
+  }
+
+  private queued() { return this.db.all<ThreadRow>("SELECT * FROM threads WHERE state='queued' ORDER BY priority DESC, created, rowid"); }
+
+  // Where a queued thread starts now (null: nowhere), and the hold it makes when it is the first that fits nowhere.
+  // `limited`: the subscription's weekly limit holds session-billed starts.
+  private next(t: ThreadRow, limited: boolean, hold: Hold | null): { est: Est; host: string | null; made: Hold | null } {
+    const est = this.estimate(t), host = limited && t.billing !== "api" ? null : this.pick(t, est, hold);
+    return { est, host, made: !host && !limited && !hold ? this.holdFor(t, est) : null };
+  }
+
   private async place() {
-    const hold = Number(this.db.meta("hold_until") ?? 0), held = this.now() < hold;
-    // A thread that fits nowhere is skipped, not blocking, so small work still flows past a heavy one.
-    for (const t of this.db.all<ThreadRow>("SELECT * FROM threads WHERE state='queued' ORDER BY priority DESC, created, rowid")) {
-      if (held && t.billing !== "api") continue;   // the subscription's weekly limit holds only session-billed starts
-      const est = this.estimate(t), host = this.pick(t, est);
+    const limited = this.now() < Number(this.db.meta("hold_until") ?? 0);
+    let hold: Hold | null = null;
+    for (const t of this.queued()) {
+      const { est, host, made } = this.next(t, limited, hold);
+      hold ??= made;
       if (host) await this.launch(t, host, t.prompt, est, "queued");
     }
   }
@@ -485,15 +477,18 @@ export class Scheduler {
 
   // Read-only: the same checks place() and sends() make, phrased as why each waiting entry has not started.
   queue(hosts: HostView[]): QueueView {
-    const now = this.now(), hold = Number(this.db.meta("hold_until") ?? 0), rows = this.db.all<HostRow>("SELECT * FROM hosts ORDER BY name");
-    const held = now < hold ? `usage-limit hold until ${new Date(hold).toISOString()}` : null;
+    const now = this.now(), until = Number(this.db.meta("hold_until") ?? 0), rows = this.db.all<HostRow>("SELECT * FROM hosts ORDER BY name");
+    const held = now < until ? `usage-limit hold until ${new Date(until).toISOString()}` : null;
     const entry = (t: ThreadRow, since: number, waiting: string | null) => ({ id: t.id, caller: t.caller, repo: t.repo, tag: t.tag, host: t.host, since, waiting });
-    const queued = this.db.all<ThreadRow>("SELECT * FROM threads WHERE state='queued' ORDER BY priority DESC, created, rowid").map((t) => {
-      const est = this.estimate(t), fits = rows.map((h) => [h.name, this.fit(t, est, h)] as const);
+    let hold: Hold | null = null;
+    const queued = this.queued().map((t) => {
+      const h = hold, { est, host, made } = this.next(t, !!held, h), holds = made?.host ?? null;
+      hold ??= made;
+      const why = (r: HostRow) => { const f = this.fit(t, est, r); return r.name === h?.host ? `held for ${h.thread}` : typeof f === "string" ? f : "fits"; };
+      const fits = rows.map((r) => `${r.name}: ${why(r)}`).join("; ");
       const heldHere = t.billing !== "api" ? held : null;   // api-billed threads never wait on the subscription's hold
-      const waiting = heldHere ?? (!rows.length ? "no host has reported"
-        : fits.some(([, f]) => typeof f !== "string") ? null : fits.map(([n, f]) => `${n}: ${f}`).join("; "));
-      return { ...entry(t, t.created, waiting), priority: !!t.priority, estimateMb: est.mb, estimateCores: est.cores, prompt: t.prompt.slice(0, 500) };
+      const waiting = heldHere ?? (!rows.length ? "no host has reported" : host ? null : fits);
+      return { ...entry(t, t.created, waiting), priority: !!t.priority, estimateMb: est.mb, holds, prompt: t.prompt.slice(0, 500) };
     });
     const followUps = this.db.all<ThreadRow & { count: number; first: number }>(
       "SELECT t.*, COUNT(*) count, MIN(s.created) first FROM sends s JOIN threads t ON t.id=s.thread GROUP BY s.thread ORDER BY MIN(s.id)").map((t) => {
@@ -509,7 +504,7 @@ export class Scheduler {
     const running = this.db.all<ThreadRow & { started: number }>(
       "SELECT t.*, u.started FROM threads t JOIN turns u ON u.thread=t.id AND u.n=t.turns WHERE t.state='running' ORDER BY u.started");
     return {
-      holdUntil: held ? hold : null, queued, followUps, idle,
+      holdUntil: held ? until : null, queued, followUps, idle,
       hosts: hosts.map((h) => ({ ...h, threads: running.filter((t) => t.host === h.name)
         .map((t) => ({ id: t.id, caller: t.caller, repo: t.repo, tag: t.tag, turn: t.turns, startedAt: t.started,
           activity: steps(this.db, t.id, t.turns, { n: 1, results: false }).steps[0] ?? null })),

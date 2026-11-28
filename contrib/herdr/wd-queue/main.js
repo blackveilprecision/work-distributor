@@ -120,13 +120,13 @@ export default class WdQueue extends View {
 
   host(t, h) {
     const key = `h:${h.name}`, open = this.open.has(key), full = h.maxThreads != null && h.running >= h.maxThreads, ok = h.state === "ok";
-    const busy = (h.load1 ?? 0) + (h.cpuPromisedCores ?? 0);   // cores in use or promised to running turns
+    const busy = h.load1 ?? 0;   // the load average
     const dot = !ok ? (h.state === "asleep" ? t.idle : t.blocked) : h.running ? t.working : t.dim;
     const repos = Object.entries(h.repos ?? {});
     return v_flex().id(`h-${h.name}`).rounded(6).when(open, (el) => el.bg(t.raised).pb(4))
       .child(h_flex().id(`hh-${h.name}`).h(28).px(8).gap(8).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover))
         .on_click((_e, cx) => this.toggle(key, cx))
-        .tooltip(ok ? `CPU ${busy.toFixed(1)} of ${h.cores} cores busy or promised · RAM ${gb(h.memAvailMb)} free of ${gb(h.memTotalMb)} · disk ${h.diskFreePct}% free · click for details` : h.reason ?? h.state)
+        .tooltip(ok ? `CPU ${busy.toFixed(1)} of ${h.cores} cores busy · RAM ${gb(h.memAvailMb)} free of ${gb(h.memTotalMb)} · disk ${h.diskFreePct}% free · click for details` : h.reason ?? h.state)
         .child(div().size(7).flex_none().rounded(4).bg(dot))
         .child(div().text_color(t.foreground).when(open, (el) => el.font_medium()).child(h.name))
         .child(div().text_size(11).text_color(full ? t.blocked : t.muted).child(h.maxThreads == null ? `${h.running}` : `${h.running}/${h.maxThreads}`))

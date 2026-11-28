@@ -77,7 +77,7 @@ describe("placement", () => {
     expect([state(h, t1), state(h, t2)]).toEqual(["running", "queued"]);
   });
 
-  test("no thread cap by default: memory and CPU decide", async () => {
+  test("no thread cap by default: memory decides", async () => {
     const h = harness();
     await ready(h, ["a"], { memAvailMb: 30000 });
     const ids = Array.from({ length: 6 }, () => submit(h));
@@ -85,32 +85,22 @@ describe("placement", () => {
     expect(ids.map((id) => state(h, id))).toEqual(Array(6).fill("running"));
   });
 
-  test("CPU: the load average and what running turns were promised count against cores times cpuOversub", async () => {
+  test("CPU never stops a start: a host with every core busy still takes what fits in its memory", async () => {
     const h = harness();
-    await ready(h, ["a"], { memAvailMb: 100_000, load1: 11.6 });   // 8 cores x 1.5 = 12; a small thread wants 0.5
-    const t1 = submit(h);
+    await ready(h, ["a"], { memAvailMb: 100_000, load1: 30 });   // 8 cores
+    const ids = Array.from({ length: 6 }, () => submit(h, { size: "heavy" }));
     await h.sched.tick();
-    expect(state(h, t1)).toBe("queued");
-    expect(h.sched.eligibility("o/app", "a")).toBe("cpu 11.6 of 8 cores busy or promised, needs 0.5");
-    h.sched.onHeartbeat(hb("a", { memAvailMb: 100_000, load1: 0 }));
-    const heavy = Array.from({ length: 6 }, () => submit(h, { size: "heavy" }));   // 2 cores each, promised until they use it
-    await h.sched.tick();
-    expect([t1, ...heavy].map((id) => state(h, id))).toEqual([...Array(6).fill("running"), "queued"]);   // 0.5 + 5 x 2 = 10.5, a sixth makes 12.5
-    expect(h.sched.promisedCores("a")).toBe(10.5);
+    expect(ids.map((id) => state(h, id))).toEqual(Array(6).fill("running"));
+    expect(h.sched.eligibility("o/app", "a")).toBeNull();
   });
 
-  test("a CPU estimate larger than a host's cores asks for all of them there, not for the impossible", async () => {
+  test("equal hosts take turns: a host's score is split over the turns already on it", async () => {
     const h = harness();
-    await ready(h, ["a"], { memAvailMb: 30000, load1: 1.2 });   // 8 cores
-    h.sched.estimate = () => ({ mb: 2048, cores: 15.16 });        // measured on a 16-core host
-    const t1 = submit(h);
+    await ready(h, ["a"], { memAvailMb: 30000 });
+    await ready(h, ["b"], { memAvailMb: 30000 });
+    const t1 = submit(h), t2 = submit(h);
     await h.sched.tick();
-    expect(state(h, t1)).toBe("running");
-    expect(h.db.turn(t1, 1)!.est_cpu).toBe(8);   // promised on this host: its 8 cores
-    const t2 = submit(h);
-    await h.sched.tick();
-    expect(state(h, t2)).toBe("queued");         // 1.2 + 8 promised + 8 > 12
-    expect(h.sched.eligibility("o/app", "a")).toBe("cpu 9.2 of 8 cores busy or promised, needs 8");
+    expect([h.db.thread(t1)!.host, h.db.thread(t2)!.host].sort()).toEqual(["a", "b"]);
   });
 
   test("estimates keep each size's own history: a small review is not sized like the repo's heavy builds", async () => {
@@ -122,19 +112,6 @@ describe("placement", () => {
     expect(h.sched.estimate({ repo: "o/app", size: "heavy" }).mb).toBe(12000);
     expect(h.sched.estimate({ repo: "o/app", size: "small" }).mb).toBe(2048);
     expect(h.sched.estimate({ repo: "o/app", size: null }).mb).toBe(2048);   // no size is small
-  });
-
-  test("a turn is promised the CPU it has not used for its first 10 minutes only", async () => {
-    const h = harness();
-    await ready(h, ["a"], { memAvailMb: 60000 });
-    const t1 = submit(h, { size: "heavy" });
-    await h.sched.tick();
-    expect(h.sched.promisedCores("a")).toBe(2);
-    h.advance(9 * 60_000);
-    expect(h.sched.promisedCores("a")).toBe(2);
-    h.advance(2 * 60_000);
-    expect(h.sched.promisedCores("a")).toBe(0);   // from here the load average shows what it uses
-    void t1;
   });
 
   test("billing is session unless a thread asks for api, and the start always says which", async () => {
@@ -176,27 +153,35 @@ describe("placement", () => {
     expect(h.db.thread(t3)!.host).toBe("b");
   });
 
-  test("CPU estimate: the p90 of each turn's highest one-minute rate, never below the size hint", async () => {
+  test("the first thread that fits nowhere holds the host its running turns will free; later ones start elsewhere", async () => {
     const h = harness();
-    await ready(h, ["a"], { memAvailMb: 30000 });
-    const t1 = submit(h);
+    await ready(h, ["a"], { memAvailMb: 20000 });
+    const t1 = submit(h, { size: "heavy" });
     await h.sched.tick();
-    const unit = (cpuMs: number) => [{ thread: t1, epoch: 1, turn: 1, running: true, cpuMs, memPeakMb: 500 }];
-    h.advance(61_000); h.sched.onHeartbeat(hb("a", { memAvailMb: 30000, units: unit(61_000) }));    // 1 core over the first minute
-    h.advance(61_000); h.sched.onHeartbeat(hb("a", { memAvailMb: 30000, units: unit(244_000) }));   // 3 cores over the second
-    expect(h.db.turn(t1, 1)).toMatchObject({ cpu_rate: 3, cpu_peak: 3, est_cpu: 0.5 });
-    h.advance(61_000); h.sched.onHeartbeat(hb("a", { memAvailMb: 30000, units: unit(244_000 + 61_000 * 40) }));   // a counter jump
-    expect(h.db.turn(t1, 1)).toMatchObject({ cpu_rate: 8, cpu_peak: 8 });   // capped at the host's 8 cores
-    expect(h.sched.promisedCores("a")).toBe(0);   // using more than promised
-    h.sched.onTurnEnd(turnEnd("a", t1, 1, 1));
-    expect(h.sched.estimate({ repo: "o/app", size: null })).toEqual({ mb: 2048, cores: 8 });
-    expect(h.sched.estimate({ repo: "o/rs", size: "heavy" })).toEqual({ mb: 8192, cores: 2 });
-    // A turn shorter than a quarter window counts its average.
-    const t2 = submit(h, { repo: "o/rs" });
+    const unit = [{ thread: t1, epoch: 1, turn: 1, running: true, cpuMs: 1, memPeakMb: 8192 }];
+    h.sched.onHeartbeat(hb("a", { memAvailMb: 10000, units: unit }));
+    const big = submit(h, { size: "heavy" }), small = submit(h);   // big needs 8192+2048; small needs 2048+2048
     await h.sched.tick();
-    h.advance(10_000); h.sched.onHeartbeat(hb("a", { memAvailMb: 30000, units: [{ thread: t2, epoch: 1, turn: 1, running: true, cpuMs: 15_000, memPeakMb: 500 }] }));
-    h.sched.onTurnEnd(turnEnd("a", t2, 1, 1));
-    expect(h.db.turn(t2, 1)!.cpu_peak).toBe(1.5);
+    expect([state(h, big), state(h, small)]).toEqual(["queued", "queued"]);   // small would fit on a, but a is held for big
+    const q = h.sched.queue([]);
+    expect(q.queued.map((e) => e.holds)).toEqual(["a", null]);
+    expect(q.queued[1].waiting).toBe(`a: held for ${big}`);
+    await ready(h, ["b"], { memAvailMb: 5000 });
+    await h.sched.tick();
+    expect(h.db.thread(small)!.host).toBe("b");    // small work flows past on another host
+    h.sched.onTurnEnd(turnEnd("a", t1, 1, 1, { memPeakMb: 8192 }));
+    h.sched.onHeartbeat(hb("a", { memAvailMb: 19000 }));
+    await h.sched.tick();
+    expect(h.db.thread(big)!.host).toBe("a");
+  });
+
+  test("a thread no host could ever fit holds nothing", async () => {
+    const h = harness();
+    await ready(h, ["a"], { memAvailMb: 5000 });
+    const big = submit(h, { size: "heavy" }), small = submit(h);
+    await h.sched.tick();
+    expect([state(h, big), state(h, small)]).toEqual(["queued", "running"]);
+    expect(h.sched.queue([]).queued[0].holds).toBeNull();
   });
 
   test("reservations: a running turn holds the part of its estimate it has not used yet, however long it has run", async () => {

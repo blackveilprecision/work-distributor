@@ -46,7 +46,7 @@ export function queueText(q: QueueView): string {
   const out: string[] = [];
   if (q.holdUntil) out.push(`usage-limit hold until ${new Date(q.holdUntil).toISOString()}`);
   out.push(`queued (${q.queued.length})`);
-  for (const t of q.queued) out.push(`  ${[t.id, t.repo, t.tag ?? "-", t.caller, ago(t.since), t.priority ? "priority" : "", t.waiting ?? "starting"].filter(Boolean).join("  ")}`);
+  for (const t of q.queued) out.push(`  ${[t.id, t.repo, t.tag ?? "-", t.caller, ago(t.since), t.priority ? "priority" : "", t.holds ? `holds ${t.holds}` : "", t.waiting ?? "starting"].filter(Boolean).join("  ")}`);
   if (q.followUps.length) out.push(`follow-ups (${q.followUps.length})`);
   for (const t of q.followUps) out.push(`  ${[t.id, t.host ?? "-", t.tag ?? "-", `${t.count} send${t.count > 1 ? "s" : ""}`, ago(t.since), t.waiting ?? "starting"].join("  ")}`);
   if (q.idle?.length) out.push(`idle (${q.idle.length})`);
@@ -63,8 +63,8 @@ export function queueText(q: QueueView): string {
 }
 
 const runs = (h: HostView) => `${h.running}${h.maxThreads === null ? "" : `/${h.maxThreads}`}`;
-// Load average plus CPU promised to running turns, of the host's cores; speed is the agent's single-core benchmark.
-const cpu = (h: HostView) => `cpu=${(h.load1 + h.cpuPromisedCores).toFixed(1)}/${h.cores}${h.cpuScore ? ` speed=${h.cpuScore}` : ""}`;
+// Load average of the host's cores; speed is the agent's single-core benchmark.
+const cpu = (h: HostView) => `cpu=${h.load1.toFixed(1)}/${h.cores}${h.cpuScore ? ` speed=${h.cpuScore}` : ""}`;
 
 // The hook must never block the user's prompt: any failure prints nothing and exits 0.
 async function hook(cfg: Cfg, event: string, after?: string): Promise<void> {
