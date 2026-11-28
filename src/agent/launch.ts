@@ -33,13 +33,19 @@ export function turnEnv(s: StartTurn, wt: string, o: { target?: string | null; s
   };
 }
 
+// A turn is headless: claude exits with its reply, and anything still running in the background (a Workflow, a
+// background Bash or agent) dies with it. No notification ever reaches the session afterwards.
+export const HEADLESS_NOTE = "This session is headless and ends the moment you reply: background tasks (Workflow runs, background Bash, background agents) are killed then and no notification will ever arrive. Wait for every one to finish (or stop it) before your final reply.";
+
+export const TARGET_NOTE = " CARGO_TARGET_DIR is shared with other worktrees and cargo decides freshness by file times, not contents: build any extra git worktree you create with a CARGO_TARGET_DIR of its own.";
+
 export function claudeArgs(s: StartTurn): string[] {
   return [
     "-p", "--output-format", "stream-json", "--verbose",
     ...(s.resume ? ["--resume", s.sessionId] : ["--session-id", s.sessionId]),
     "--setting-sources", "user", "--strict-mcp-config",
     "--settings", JSON.stringify({ crossSessionInbound: "refuse", syncClaudeAiPlugins: false, syncClaudeAiSkills: false }),
-    "--dangerously-skip-permissions", ...(s.model ? ["--model", s.model] : []),
+    "--dangerously-skip-permissions", "--append-system-prompt", HEADLESS_NOTE + (s.rust ? TARGET_NOTE : ""), ...(s.model ? ["--model", s.model] : []), ...(s.effort ? ["--effort", s.effort] : []),
   ];
 }
 
@@ -51,7 +57,7 @@ export function piArgs(s: StartTurn, apiKey?: string): string[] {
   const anthropicModel = typeof s.model === "string" && s.model.startsWith("anthropic/");
   const byKey = s.billing === "api" && anthropicModel;
   if (byKey && !apiKey) throw new Error("api billing needs ANTHROPIC_API_KEY in the agent's envFile");
-  return ["-p", "--mode", "json", "--approve", "--no-mcp", ...(byKey ? ["--api-key", apiKey!] : []), "--session-id", s.sessionId, ...(s.model ? ["--model", s.model] : [])];
+  return ["-p", "--mode", "json", "--approve", "--no-mcp", ...(byKey ? ["--api-key", apiKey!] : []), "--session-id", s.sessionId, ...(s.model ? ["--model", s.model] : []), ...(s.effort ? ["--thinking", s.effort] : [])];
 }
 
 // Session billing (the default) means the runner's stored subscription login pays: no API keys from the envFile reach
@@ -269,7 +275,10 @@ export async function sweep(meta: TurnMeta): Promise<void> {
 // leave an exit file of 137 or none at all.
 export function classify(u: { load: string; active: string; result: string } | null, exit: number | null, reason: string | null, mode: "systemd" | "pgroup"): { kind: TurnEnd["kind"]; exitCode: number | null } {
   if (reason) return { kind: reason === "timeout" ? "timeout" : "killed", exitCode: exit };
-  if (u && u.load === "loaded" && u.active === "failed") return { kind: u.result === "timeout" ? "timeout" : u.result === "oom-kill" ? "oom" : "killed", exitCode: exit };
+  // Result "timeout" is also a stop timeout: the turn ended, and a daemon it left (kache-engine) outlived the stop
+  // SIGTERM. An exit file says run.sh finished on its own, which a RuntimeMaxSec kill never lets it do.
+  if (u && u.load === "loaded" && u.active === "failed" && !(u.result === "timeout" && exit !== null))
+    return { kind: u.result === "timeout" ? "timeout" : u.result === "oom-kill" ? "oom" : "killed", exitCode: exit };
   if (exit === null) return { kind: "lost", exitCode: null };
   // Without cgroups a SIGKILL nobody sent from here is most likely the system under memory pressure.
   return { kind: mode === "pgroup" && exit === 137 ? "oom" : "exited", exitCode: exit };

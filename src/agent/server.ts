@@ -7,7 +7,7 @@ import { launch, readMeta, stopTurn, turnDir, turnKey } from "./launch";
 import { probe } from "./probe";
 import { SWEEP_EVERY_MS, sweepOrphans } from "./sweep";
 import { type Active, type Ctx, tailTurn } from "./tail";
-import { ensureMirror, git, leaseTarget, prepareWorktree, releaseTarget, releaseWorktree, wtPath } from "./workspace";
+import { claimTarget, ensureMirror, git, leaseTarget, prepareWorktree, releaseTarget, releaseWorktree, wtPath } from "./workspace";
 
 export { VERSION } from "../shared/version";
 import { replaceBinary, wantUpdate } from "./update";
@@ -37,6 +37,7 @@ async function start(ctx: Ctx, s: StartTurn): Promise<void> {
     try {
       const wt = await prepareWorktree(cfg, s);
       target = s.rust ? leaseTarget(cfg, s.repoId, key, (k) => ctx.active.has(k)) : null;
+      if (target) await claimTarget(target, wt);
       track(ctx, await launch(cfg, s, wt, target));
     } catch (e) {
       releaseTarget(target);
@@ -132,7 +133,7 @@ export async function startAgent(cfg: AgentConfig) {
       if (req.headers.get("authorization") !== `Bearer ${cfg.token}`) return json({ error: "unauthorized" }, 401);
       const path = new URL(req.url).pathname;
       try {
-        if (req.method === "GET" && path === "/probe") return json(await probe(cfg));
+        if (req.method === "GET" && path === "/probe") return json(await probe(cfg, Infinity));   // asked for (doctor, install): wait for the real checks
         if (req.method !== "POST") return json({ error: "not found" }, 404);
         const b: any = await req.json().catch(() => null);
         if (!b || typeof b !== "object") return json({ error: "json body required" }, 400);

@@ -16,7 +16,7 @@ if (argv.includes("--version")) { console.log(`${process.env.FAKE_CLAUDE_VERSION
 const format = val("--output-format") ?? "text";
 const resume = val("--resume"), sessionId = resume ?? val("--session-id") ?? crypto.randomUUID();
 // the prompt is the positional argument when there is one, else stdin
-const flagsWithValue = new Set(["--output-format", "--session-id", "--resume", "--setting-sources", "--settings", "--model", "--max-turns"]);
+const flagsWithValue = new Set(["--output-format", "--session-id", "--resume", "--setting-sources", "--settings", "--model", "--max-turns", "--effort", "--append-system-prompt"]);
 const positional = argv.find((a, i) => !a.startsWith("-") && !flagsWithValue.has(argv[i - 1] ?? ""));
 const prompt = positional ?? (await Bun.stdin.text());
 const started = Date.now();

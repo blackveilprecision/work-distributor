@@ -1,6 +1,6 @@
 // The MCP tools live here, not in `wd mcp`: that process runs as long as its Claude session, so tools defined in the
 // coordinator change with a coordinator restart. Each tool maps onto a caller API route.
-import type { ThreadView } from "../shared/types";
+import { EFFORTS, type ThreadView } from "../shared/types";
 import { HttpError } from "./scheduler";
 
 const str = { type: "string" };
@@ -8,8 +8,8 @@ const tool = (name: string, description: string, props: Record<string, unknown> 
   ({ name, description, inputSchema: { type: "object" as const, properties: props, required } });
 
 export const TOOLS = [
-  tool("wd_submit", "Queue a thread on some host: a Claude Code session, or a pi session when runner is \"pi\" (models like \"deepseek/deepseek-flash\" or \"anthropic/claude-sonnet-5-5:high\"). billing: session (default, the stored subscription login) or api (the host's envFile keys). Returns {id, position} at once; the report arrives on its own when it ends.", {
-    repo: str, prompt: str, ref: str, model: str, branch: str, tag: str, requires: { type: "array", items: str },
+  tool("wd_submit", "Queue a thread on some host: a Claude Code session, or a pi session when runner is \"pi\" (models like \"deepseek/deepseek-flash\" or \"anthropic/claude-sonnet-5-5:high\"). effort: low to max (claude --effort, pi --thinking; default the host's settings). billing: session (default, the stored subscription login) or api (the host's envFile keys). Returns {id, position} at once; the report arrives on its own when it ends.", {
+    repo: str, prompt: str, ref: str, model: str, effort: { enum: [...EFFORTS] }, branch: str, tag: str, requires: { type: "array", items: str },
     runner: { enum: ["claude", "pi"] }, billing: { enum: ["api", "session"] }, size: { enum: ["small", "heavy"] }, priority: { type: "boolean" }, ttlHours: { type: "number" },
   }, ["repo", "prompt"]),
   tool("wd_send", "Queue a follow-up turn on an existing thread.", { thread: str, text: str }, ["thread", "text"]),

@@ -82,6 +82,9 @@ describe("a turn", () => {
     const end = await endOf();
     expect(end.pushed).toBe(true);
     expect(sh(h.origin, "git", "log", "-1", "--format=%s", "wd/t1")).toBe("wd: uncommitted work at end of turn");
+    // Authored by the configured identity, as the worker's own commits are; wd's only when there is none.
+    const name = Bun.spawnSync(["git", "config", "--get", "user.name"], { cwd: h.origin }).stdout.toString().trim() || "wd";
+    expect(sh(h.origin, "git", "log", "-1", "--format=%an", "wd/t1")).toBe(name);
     const files = sh(h.origin, "git", "ls-tree", "-r", "--name-only", "wd/t1");
     expect(files).toContain("dirty.txt");
     expect(files).not.toContain(".wd-tmp");

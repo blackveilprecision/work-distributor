@@ -8,12 +8,16 @@ export type HostState = "ok" | "refused" | "asleep" | "lost" | "closed";
 
 // ---- Caller API (HTTP on the coordinator, used by the CLI, the MCP plugin and services) ----
 
+export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type Effort = (typeof EFFORTS)[number];
+
 export interface SubmitRequest {
   caller: string;            // who gets the reports, e.g. "orch:shop"
   repo: string;              // a registered repo id, e.g. "acme/shop"
   ref?: string;              // base ref, default the repo's default branch
   prompt: string;
   model?: string;            // passed to the runner's --model
+  effort?: Effort;           // claude --effort, pi --thinking; default the host's settings
   runner?: "claude" | "pi";  // which agent runs the thread; default claude. pi models are "provider/id[:thinking]"
   billing?: "api" | "session";  // who pays for the turn; default session (the runner's stored subscription login). api: the envFile's keys
   requires?: string[];       // host labels that must all be present; every host also has its own name as a label
@@ -86,7 +90,7 @@ export interface StartTurn {
   thread: string; epoch: number; turn: number;
   repoUrl: string; repoId: string; ref: string; branch: string;
   sessionId: string; resume: boolean;   // claude turn 1: --session-id, later turns: --resume; pi: --session-id every turn
-  prompt: string; model?: string;
+  prompt: string; model?: string; effort?: Effort;
   runner?: "claude" | "pi";            // absent = claude; pi runs the agent's `pi` binary instead of `claude`
   billing?: "api" | "session";         // session drops *_API_KEY and uses the stored login; api: the envFile's keys bill the turn (absent: session; agents before 0.4.11 read absent as api)
   memoryMaxMb: number; runtimeMaxSec: number;

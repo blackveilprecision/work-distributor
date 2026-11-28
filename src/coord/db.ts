@@ -6,7 +6,7 @@ import type { ThreadState, ThreadView } from "../shared/types";
 
 export interface ThreadRow {
   id: string; caller: string; repo: string; ref: string; branch: string; tag: string | null;
-  prompt: string; model: string | null; runner: "claude" | "pi" | null; billing: "api" | "session" | null; requires: string; size: string | null; priority: number; ttl_hours: number;
+  prompt: string; model: string | null; runner: "claude" | "pi" | null; billing: "api" | "session" | null; effort: string | null; requires: string; size: string | null; priority: number; ttl_hours: number;
   state: ThreadState; host: string | null; epoch: number; turns: number; head: string | null; cost: number;
   last_message: string | null; reason: string | null; session_id: string; released: number;
   created: number; updated: number; idle_at: number | null; final_at: number | null;
@@ -22,7 +22,7 @@ export interface HostRow { name: string; hb: string; seen: number; state: string
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS threads(id TEXT PRIMARY KEY, caller TEXT NOT NULL, repo TEXT, ref TEXT, branch TEXT, tag TEXT,
-  prompt TEXT, model TEXT, runner TEXT, billing TEXT, requires TEXT, size TEXT, priority INTEGER DEFAULT 0, ttl_hours REAL DEFAULT 24, state TEXT,
+  prompt TEXT, model TEXT, runner TEXT, billing TEXT, effort TEXT, requires TEXT, size TEXT, priority INTEGER DEFAULT 0, ttl_hours REAL DEFAULT 24, state TEXT,
   host TEXT, epoch INTEGER DEFAULT 0, turns INTEGER DEFAULT 0, head TEXT, cost REAL DEFAULT 0, last_message TEXT, reason TEXT,
   session_id TEXT, released INTEGER DEFAULT 0, created INTEGER, updated INTEGER, idle_at INTEGER, final_at INTEGER);
 CREATE INDEX IF NOT EXISTS threads_state ON threads(state);
@@ -55,6 +55,7 @@ export class Db {
     try { this.raw.exec("ALTER TABLE events ADD COLUMN at INTEGER"); } catch {}
     try { this.raw.exec("ALTER TABLE threads ADD COLUMN runner TEXT"); } catch {}
     try { this.raw.exec("ALTER TABLE threads ADD COLUMN billing TEXT"); } catch {}
+    try { this.raw.exec("ALTER TABLE threads ADD COLUMN effort TEXT"); } catch {}
     for (const c of ["est_cpu REAL DEFAULT 0", "cpu_rate REAL DEFAULT 0", "cpu_peak REAL DEFAULT 0", "cpu_at INTEGER", "cpu_base INTEGER DEFAULT 0"])
       try { this.raw.exec(`ALTER TABLE turns ADD COLUMN ${c}`); } catch {}
   }

@@ -152,6 +152,8 @@ Use a shell where you do not later run the real installers, or `unset WD_CLIENT_
 
 ```sh
 wd submit acme/shop "Fix the failing date test in src/date.ts and commit the fix." --model sonnet --tag date-fix
+wd submit acme/shop "Redesign the order sync." --model opus --effort high   # --effort low|medium|high|xhigh|max;
+                            # default: the host's settings for the model. pi threads get it as --thinking
 wd ls                       # this caller's threads
 wd status <id> [--full]     # --full: every turn's whole message (reports cut them at 4,000 chars)
 wd send <id> "Also add a regression test."

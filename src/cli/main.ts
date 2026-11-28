@@ -2,7 +2,7 @@
 // so that `wd <command> --help` explains each one.
 import { defineCommand, renderUsage, runCommand, type ArgsDef, type CommandDef } from "citty";
 import { ack, call, loadCfg, qs, reportText, type Cfg } from "./client.ts";
-import type { HostView, QueueView, Report, Steps, ThreadView } from "../shared/types.ts";
+import { type Effort, EFFORTS, type HostView, type QueueView, type Report, type Steps, type ThreadView } from "../shared/types.ts";
 import { VERSION } from "../shared/version.ts";
 
 const json = (v: unknown) => console.log(JSON.stringify(v));
@@ -101,6 +101,7 @@ const submit = defineCommand({
     ref: { type: "string", valueHint: "ref", description: "Base ref for the work branch (default: the repo's default branch)" },
     branch: { type: "string", valueHint: "name", description: "Work branch to create and push (default: wd/<thread id>)" },
     model: { type: "string", valueHint: "model", description: "Passed to the runner's --model, e.g. sonnet, opus, haiku (claude) or deepseek/deepseek-flash (pi)" },
+    effort: { type: "enum", options: [...EFFORTS], description: "Reasoning effort: claude --effort, pi --thinking (default: the host's settings for the model)" },
     runner: { type: "enum", options: ["claude", "pi"], description: "Which agent runs the thread (default: claude); pi models are provider/id[:thinking]" },
     billing: { type: "enum", options: ["api", "session"], description: "Who pays: session (default) drops API keys and bills the runner's stored subscription login; api uses the agent envFile's keys" },
     require: { type: "string", valueHint: "label", description: "Host label the thread needs; repeat for several" },
@@ -115,7 +116,7 @@ const submit = defineCommand({
     if (!prompt.trim()) throw new Error("submit needs a prompt");
     const cfg = cfgOf(args), requires = many(rawArgs, "require");
     json(await call(cfg, "POST", "/threads", {
-      caller: cfg.caller, repo: args.repo, prompt, ref: args.ref, model: args.model, runner: args.runner, billing: args.billing, requires: requires.length ? requires : undefined, size: args.size,
+      caller: cfg.caller, repo: args.repo, prompt, ref: args.ref, model: args.model, effort: args.effort as Effort | undefined, runner: args.runner, billing: args.billing, requires: requires.length ? requires : undefined, size: args.size,
       priority: args.priority || undefined, ttlHours: num(args.ttl), tag: args.tag, branch: args.branch,
     }));
   },

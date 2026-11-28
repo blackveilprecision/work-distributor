@@ -58,6 +58,21 @@ export async function loginCheck(cfg: AgentConfig): Promise<Login> {
   return l;
 }
 
+// A heartbeat waits only this long for the login and pi checks (each a real model call, up to 120 s). A slower one
+// finishes in the background and the heartbeat carries the last result: a slow check must never silence the host,
+// or the coordinator declares it lost and its running threads with it.
+export const CHECK_WAIT_MS = 5_000;
+const inflight = new Map<string, Promise<unknown>>();
+async function bounded<T>(key: string, check: () => Promise<T>, last: T, waitMs: number): Promise<T> {
+  let p = inflight.get(key) as Promise<T> | undefined;
+  if (!p) { p = check().finally(() => inflight.delete(key)); inflight.set(key, p); }
+  if (waitMs === Infinity) return p;
+  let timer: any;
+  const r = await Promise.race([p, new Promise<undefined>((ok) => { timer = setTimeout(ok, waitMs); })]);
+  clearTimeout(timer);
+  return r ?? last;
+}
+
 async function memAvailMb(): Promise<number> {
   if (process.platform === "linux") {
     const m = /MemAvailable:\s+(\d+) kB/.exec(readFileSync("/proc/meminfo", "utf8"));
@@ -72,20 +87,21 @@ async function memAvailMb(): Promise<number> {
   return Math.round(freemem() / 1048576);
 }
 
-export async function probe(cfg: AgentConfig): Promise<Probe> {
+export async function probe(cfg: AgentConfig, waitMs = CHECK_WAIT_MS): Promise<Probe> {
   mkdirSync(cfg.dataDir, { recursive: true });
   const fs = statfsSync(cfg.dataDir);
   const os = process.platform === "linux" ? "linux" : "darwin";
   const problems: string[] = [];
   const v = await run([cfg.claude, "--version"], { timeout: 20_000 });
   const claudeVersion = v.ok ? v.out.split(/\s+/)[0] || null : null;
-  const lg = claudeVersion ? await loginCheck(cfg) : null;
+  const lastLogin: Login = login?.claude === cfg.claude ? login : { at: 0, ok: false, error: "claude login check still running", expires: null, claude: cfg.claude };
+  const lg = claudeVersion ? await bounded(`login ${gen} ${cfg.claude}`, () => loginCheck(cfg), lastLogin, waitMs) : null;
   // Runner readiness is not a host problem: a host that lost its claude login still serves pi threads, and vice versa.
   // The scheduler refuses the host only when no runner works, and fit() checks the thread's own runner.
   let loginError: string | null = null;
   if (!claudeVersion) loginError = `claude not runnable (${cfg.claude}): ${v.err.slice(0, 200)}`;
   else if (lg && !lg.ok) loginError = lg.error;
-  const pg = cfg.pi ? await piCheck(cfg) : null;   // no pi in agent.json: the host simply has no pi runner
+  const pg = cfg.pi ? await bounded(`pi ${piGen}`, () => piCheck(cfg), pi ?? { at: 0, ok: false, error: "pi check still running", version: null }, waitMs) : null;   // no pi in agent.json: the host simply has no pi runner
   const diskFreePct = Math.round((fs.bavail / fs.blocks) * 1000) / 10;
   if (diskFreePct < 5) problems.push(`disk almost full (${diskFreePct}% free)`);
   if (fs.files > 0 && fs.ffree / fs.files < 0.05) problems.push("inodes almost exhausted");

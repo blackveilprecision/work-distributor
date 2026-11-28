@@ -2,9 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classify, claudeArgs, cpuCounter, cpuMsOf, status, sweep, type TurnMeta, parsePs, piArgs, quote, runScript, sessionEnv, systemdRunArgs, treeOf, turnEnv, outside, cargoWrapper } from "../../src/agent/launch";
+import { classify, claudeArgs, HEADLESS_NOTE, TARGET_NOTE, cpuCounter, cpuMsOf, status, sweep, type TurnMeta, parsePs, piArgs, quote, runScript, sessionEnv, systemdRunArgs, treeOf, turnEnv, outside, cargoWrapper } from "../../src/agent/launch";
 import { readLines } from "../../src/agent/tail";
-import { authArgs, leaseTarget, poolSize, releaseTarget } from "../../src/agent/workspace";
+import { authArgs, claimTarget, leaseTarget, poolSize, releaseTarget } from "../../src/agent/workspace";
 import { envFromFile, loadConfig } from "../../src/agent/config";
 import type { StartTurn } from "../../src/shared/types";
 
@@ -25,6 +25,7 @@ describe("systemd launch (argument building only)", () => {
     const u = (active: string, result: string) => ({ load: "loaded", active, result });
     expect(classify(u("failed", "oom-kill"), 137, null, "systemd")).toEqual({ kind: "oom", exitCode: 137 });
     expect(classify(u("failed", "timeout"), null, null, "systemd").kind).toBe("timeout");
+    expect(classify(u("failed", "timeout"), 0, null, "systemd")).toEqual({ kind: "exited", exitCode: 0 });   // a leftover daemon timed out the stop
     expect(classify(u("failed", "signal"), null, null, "systemd").kind).toBe("killed");
     expect(classify({ load: "not-found", active: "inactive", result: "success" }, 0, null, "systemd")).toEqual({ kind: "exited", exitCode: 0 });
     expect(classify({ load: "not-found", active: "inactive", result: "success" }, null, null, "systemd").kind).toBe("lost");
@@ -73,6 +74,10 @@ describe("run script and environment", () => {
     expect(claudeArgs(start({ resume: true }))).not.toContain("--session-id");
     expect(claudeArgs(start())).not.toContain("--model");
     expect(claudeArgs(start({ model: "opus" }))).toEqual(expect.arrayContaining(["--model", "opus"]));
+    expect(claudeArgs(start())).not.toContain("--effort");
+    expect(claudeArgs(start())).toEqual(expect.arrayContaining(["--append-system-prompt", HEADLESS_NOTE]));
+    expect(claudeArgs(start({ rust: true }))).toEqual(expect.arrayContaining(["--append-system-prompt", HEADLESS_NOTE + TARGET_NOTE]));
+    expect(claudeArgs(start({ effort: "high" }))).toEqual(expect.arrayContaining(["--effort", "high"]));
     const settings = JSON.parse(claudeArgs(start())[claudeArgs(start()).indexOf("--settings") + 1]);
     expect(settings).toEqual({ crossSessionInbound: "refuse", syncClaudeAiPlugins: false, syncClaudeAiSkills: false });
   });
@@ -81,6 +86,7 @@ describe("run script and environment", () => {
     const a = piArgs(start());
     expect(a).toEqual(["-p", "--mode", "json", "--approve", "--no-mcp", "--session-id", "sid"]);
     expect(piArgs(start({ resume: true }))).toContain("--session-id");
+    expect(piArgs(start({ effort: "low" }))).toEqual(expect.arrayContaining(["--thinking", "low"]));
     expect(piArgs(start({ model: "deepseek/deepseek-flash" }))).toEqual(expect.arrayContaining(["--model", "deepseek/deepseek-flash"]));
   });
 
@@ -307,4 +313,21 @@ test("a rustc-wrapper in the host's or the repo's cargo config keeps wd from set
   mkdirSync(join(wt, ".cargo"));
   writeFileSync(join(wt, ".cargo/config"), 'build.rustc-wrapper = "x"\n');
   expect(cargoWrapper(home, wt)).toBe(true);
+});
+
+test("claimTarget: a target dir that changes worktree gets that worktree's tracked files touched; the same one is left alone", async () => {
+  const root = mkdtempSync(join(tmpdir(), "wd-claim-")), wt = join(root, "wt"), dir = join(root, "target");
+  mkdirSync(wt); mkdirSync(dir);
+  const sh = (c: string) => Bun.spawnSync(["/bin/sh", "-c", c], { cwd: wt });
+  sh("git init -q && echo a > a.rs && echo b > untracked.rs && git add a.rs && git -c user.email=t@t -c user.name=t commit -qm a");
+  const old = new Date(Date.now() - 3600_000);
+  const { utimesSync, statSync } = require("node:fs");
+  for (const f of ["a.rs", "untracked.rs"]) utimesSync(join(wt, f), old, old);
+  await claimTarget(dir, wt);
+  expect(statSync(join(wt, "a.rs")).mtimeMs).toBeGreaterThan(Date.now() - 60_000);
+  expect(statSync(join(wt, "untracked.rs")).mtimeMs).toBeLessThan(Date.now() - 60_000);
+  utimesSync(join(wt, "a.rs"), old, old);
+  await claimTarget(dir, wt);   // same worktree as last time: cargo's own times are right
+  expect(statSync(join(wt, "a.rs")).mtimeMs).toBeLessThan(Date.now() - 60_000);
+  rmSync(root, { recursive: true, force: true });
 });

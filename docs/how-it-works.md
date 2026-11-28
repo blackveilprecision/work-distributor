@@ -54,7 +54,7 @@ When an agent reports a `rate_limit_event` with status `rejected`, all new start
 
 ## Running a turn (agent)
 1. Fetch or clone the mirror at `~/.wd/repos/<owner>__<repo>.git`, then create or reuse the worktree at `~/.wd/wt/<thread>`.
-2. For repos marked `rust`, lease a target directory from a pool of `targetDirPool` per repo, and set `RUSTC_WRAPPER=sccache` if sccache is installed and no cargo config the turn reads (`~/.cargo/config.toml` or the repo's `.cargo/config.toml`) already names a `rustc-wrapper`: the variable would override that choice (kache, for one).
+2. For repos marked `rust`, lease a target directory from a pool of `targetDirPool` per repo, and set `RUSTC_WRAPPER=sccache` if sccache is installed and no cargo config the turn reads (`~/.cargo/config.toml` or the repo's `.cargo/config.toml`) already names a `rustc-wrapper`: the variable would override that choice (kache, for one). Cargo calls a workspace crate fresh when no source file is newer than its last build, and the build's place in the target dir does not depend on the worktree's path. So when a dir was last used by another worktree, every tracked file of this one is touched first, or cargo could reuse a crate built later from other sources. Rust turns are also told in the appended note to give any extra git worktree its own `CARGO_TARGET_DIR`.
 3. Write `~/.wd/turns/<thread>-<epoch>-<turn>/run.sh`. It runs `claude` under `env -i` with this fixed environment:
    - HOME, USER, LOGNAME, `SHELL=/bin/bash`;
    - PATH: `path` from `agent.json`, or else the PATH an interactive login shell of the host user prints (`$SHELL -lic`, bash or zsh), read once when the agent starts, followed by the service's own. Tools that add themselves only in `~/.bashrc` or `~/.zshrc` (bun, nvm) are found this way;
@@ -67,7 +67,7 @@ When an agent reports a `rate_limit_event` with status `rejected`, all new start
    ```
    claude -p --output-format stream-json --verbose (--session-id|--resume) <id>
      --setting-sources user --strict-mcp-config
-     --settings '{"crossSessionInbound":"refuse",...}' --dangerously-skip-permissions [--model m]
+     --settings '{"crossSessionInbound":"refuse",...}' --dangerously-skip-permissions --append-system-prompt <headless note> [--model m] [--effort e]
    ```
 4. Start it:
    - **Linux:** as `systemd-run --user --unit wd-<thread>-<epoch>-<turn>` with `MemoryMax` and `RuntimeMaxSec`. CPU and peak memory come from the unit, plus what the turn started outside it: processes whose working directory is in the turn's worktree, and their descendants (an `hc run` terminal is started by the hc server, outside the unit). Those are measured every 5 s but not moved into the unit, so the unit's end does not kill work the thread left running on purpose, and the memory cap does not cover them.
@@ -77,7 +77,7 @@ When an agent reports a `rate_limit_event` with status `rejected`, all new start
 5. Tail `out.jsonl` from a saved byte offset. Lines can be any length; each is cut to 8000 characters after it is read. Batches go to the coordinator, and the offset only moves forward to what the coordinator committed, so every event is stored once, with the time its batch arrived. `GET /threads/:id/steps` and the `activity` in `GET /queue` summarise them: a tool call by its main input (`Bash: bun test`), text on one line, a result as `↳ ...`.
 6. When the turn exits:
    - read the `result` line (`is_error`, result text, cumulative cost);
-   - commit anything left uncommitted;
+   - commit anything left uncommitted ("wd: uncommitted work at end of turn"), authored by the git identity the worktree has configured, like the worker's own commits (`wd <wd@localhost>` only when none is set);
    - if the branch is ahead of its base, push it with `--force-with-lease`, using the token in `gitTokenFile`. While a turn runs, the branch is also pushed every 10 min;
    - send the turn end. It is retried until the coordinator accepts it.
 
@@ -114,6 +114,7 @@ Reports stay until acknowledged. There are four ways to get them:
 | No heartbeat from a macOS host | host `asleep`, with a non-final report; its threads become `lost` after `asleepLostSec` (default 6 h) |
 | No events and no CPU use for `stallMin` (default 20 min) | turn stopped; thread `stalled`. A long build with no output still uses CPU, so it is not a stall |
 | Out-of-memory kill or `RuntimeMaxSec` reached | `failed` with the cause |
+| The turn ended but a process it left (a cache daemon) outlived the unit's 10 s stop | the turn's own exit code counts: systemd's `timeout` Result there is the stop, not `RuntimeMaxSec` |
 | Turn process vanished without exiting (host restart) | resumed once on the same host with "You were interrupted by a host restart"; a second time in a row gives `lost` |
 | Agent restart | nothing: turns keep running and the tailer picks them up |
 | Coordinator restart | nothing: agents buffer and resend events and turn ends; CLI and tool calls retry a refused connection for 20 seconds; the report stream reconnects |
@@ -126,7 +127,7 @@ Reports stay until acknowledged. There are four ways to get them:
 Every heartbeat (15 s) carries the agent's probe:
 - OS, cores, total and available memory, free disk;
 - `claude --version`;
-- a headless login check, cached for an hour;
+- a headless login check (and pi's, when configured), cached for an hour and rechecked after two minutes when it fails. Each is a real model call of up to 120 s, so a heartbeat waits for one at most 5 s and otherwise carries the last result while the check finishes in the background: a slow check under load must not silence the host, or the coordinator declares it lost. `GET /probe` (doctor, install) waits for the real result;
 - on Linux, lingering and cgroup v2.
 
 A host with any problem is `refused`, and the reason is shown in `wd hosts`.
@@ -186,11 +187,15 @@ Hosts and repos can be listed in `coord.json` or registered through the caller A
 | `maxThreads` | none | optional cap on concurrent turns; without it memory and CPU decide |
 | `dataDir` | `~/.wd` | mirrors, worktrees, turns, target dirs |
 | `gitTokenFile` | | GitHub token used for pushes |
-| `envFile` | | KEY=value lines added to the login check and every turn's environment (e.g. `ANTHROPIC_API_KEY` to bill workers to API credits instead of a subscription session); keep it mode 600 |
+| `envFile` | | KEY=value lines added to every turn's environment; `*_API_KEY` entries only for threads with `--billing api` (see below); keep it mode 600 |
 | `pi` | | the pi coding agent, for threads submitted with `--runner pi` |
 | `piProbe.model` | | model for the pi readiness check, e.g. `deepseek/deepseek-flash` (pi reads its own `~/.pi/agent/auth.json`, so no key goes in the turn environment) |
 
 A thread submitted with `--runner pi` (CLI or MCP) runs as `pi -p --mode json --approve --no-mcp --session-id <id>` with the same worktree, prompt-file and env-file plumbing as a claude thread; its model is pi's `provider/id[:thinking]` form (e.g. `deepseek/deepseek-flash` or `anthropic/claude-sonnet-5-5:high`). The outcome of a pi turn is its last `turn_end` event (final message, usage, stop reason). A host serves a pi thread only when its pi probe passes, and a claude thread only when the claude login works — the host itself is refused only when neither runner is ready.
+
+The appended note tells the session it is headless: `claude -p` exits with its reply, so a Workflow, background Bash or background agent still running then is killed. The session must wait for them before replying.
+
+A thread's `effort` (`low` to `max`, optional) becomes claude's `--effort` or pi's `--thinking`; without one, the host's own settings for the model apply. The model and effort hold for the whole thread: how a task is split up inside it (subagents, a workflow) is the caller's prompt to ask for.
 
 Billing is `session` by default: the runner's stored subscription login pays. For claude every `*_API_KEY` from the envFile is dropped from the turn environment (so the stored OAuth credential pays), and the login check runs the same way, so it checks the subscription itself; for pi on an `anthropic/*` model no `--api-key` is passed (pi's own auth store pays). `--billing api` bills a thread to the envFile's keys instead: they join the turn environment, and a pi `anthropic/*` model gets `--api-key` from `ANTHROPIC_API_KEY`. The coordinator always sends the setting, because agents before 0.4.11 read a missing one as `api`. The usage-limit hold only ever blocks session-billed starts: an api-billed thread never arms it and never waits on it.
 | `path` | the login shell's PATH | PATH for doctors and turns |

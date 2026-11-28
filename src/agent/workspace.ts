@@ -18,7 +18,12 @@ export function authArgs(cfg: AgentConfig): string[] {
   return ["-c", "credential.helper=", "-c", `credential.helper=${helper}`];
 }
 const gitEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? "ssh -o BatchMode=yes" };
-const ident = ["-c", "user.name=wd", "-c", "user.email=wd@localhost"];
+// The worktree's own git identity (repo, global or system config) authors the end-of-turn commit, as it does the
+// worker's commits; wd's is only a fallback for a host with none, where git would refuse to commit.
+const ident = async (cfg: AgentConfig, wt: string) => {
+  const has = async (k: string) => !!(await git(cfg, wt, ["config", "--get", k])).out.trim();
+  return [...(await has("user.name")) ? [] : ["-c", "user.name=wd"], ...(await has("user.email")) ? [] : ["-c", "user.email=wd@localhost"]];
+};
 export const git = (cfg: AgentConfig, cwd: string, args: string[], auth = false, timeout = 300_000): Promise<Ran> =>
   run(["git", ...(auth ? authArgs(cfg) : []), ...args], { cwd, env: gitEnv, timeout });
 
@@ -83,7 +88,7 @@ export async function pushWork(cfg: AgentConfig, thread: string, branch: string,
   if (!existsSync(wt)) return { head: null, pushed: false, pushError: "worktree missing" };
   if (commit && (await git(cfg, wt, ["status", "--porcelain"])).out) {
     await git(cfg, wt, ["add", "-A"]);
-    await git(cfg, wt, [...ident, "commit", "-q", "--no-verify", "-m", "wd: uncommitted work at end of turn"]);
+    await git(cfg, wt, [...(await ident(cfg, wt)), "commit", "-q", "--no-verify", "-m", "wd: uncommitted work at end of turn"]);
   }
   const head = (await git(cfg, wt, ["rev-parse", "HEAD"])).out || null;
   const base = existsSync(wt + ".base") ? readFileSync(wt + ".base", "utf8").trim() : "";
@@ -129,6 +134,20 @@ export function leaseTarget(cfg: AgentConfig, repoId: string, key: string, live:
     return f.dir;
   }
   return null;
+}
+// Cargo calls a workspace crate fresh when no source file is newer than its last build, and the build's name in the
+// target dir does not depend on the worktree's path. So a dir last used by another worktree can hold a crate built
+// later than this worktree's (different) sources, and cargo would reuse it: a gate passing or failing on the wrong
+// code. When the dir changes worktree, every tracked file here is touched, and the first build recompiles the
+// workspace's own crates (the compiler cache makes that cheap). Registry crates are keyed by version and stay.
+export async function claimTarget(dir: string, wt: string) {
+  const mark = join(dir, ".wd-worktree");
+  if (existsSync(mark) && readFileSync(mark, "utf8") === wt) return;
+  const r = await run(["git", "-C", wt, "ls-files", "-z"], { timeout: 60_000 });
+  if (!r.ok) throw new Error(`git ls-files: ${r.err.slice(0, 200)}`);
+  const now = new Date();
+  for (const f of r.out.split("\0")) if (f) try { utimesSync(join(wt, f), now, now); } catch {}
+  writeFileSync(mark, wt);
 }
 export function releaseTarget(dir: string | null) {
   if (!dir) return;

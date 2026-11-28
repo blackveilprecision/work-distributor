@@ -1,4 +1,4 @@
-import { FINAL } from "../shared/types";
+import { type Effort, EFFORTS, FINAL } from "../shared/types";
 import type {
   DoctorRequest, DoctorResult, EventsAck, EventsBatch, Heartbeat, HeartbeatReply, Release, Report, StartTurn,
   StopTurn, SubmitRequest, SubmitResponse, ThreadState, TurnEnd, HostView, QueueView,
@@ -74,12 +74,13 @@ export class Scheduler {
     if (!r.prompt || typeof r.prompt !== "string") throw new HttpError(400, "prompt is required");
     const repo = this.repo(r.repo);
     if (!repo) throw new HttpError(400, `unknown repo ${r.repo}`);
+    if (r.effort && !EFFORTS.includes(r.effort)) throw new HttpError(400, `effort is one of ${EFFORTS.join(", ")}`);
     const id = crypto.randomUUID().slice(0, 8), t = this.now(), pr = r.priority ? 1 : 0;
     this.db.run(
-      `INSERT INTO threads(id,caller,repo,ref,branch,tag,prompt,model,runner,billing,requires,size,priority,ttl_hours,state,session_id,created,updated)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?,?)`,
+      `INSERT INTO threads(id,caller,repo,ref,branch,tag,prompt,model,runner,billing,effort,requires,size,priority,ttl_hours,state,session_id,created,updated)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?,?)`,
       id, r.caller, r.repo, r.ref ?? repo.defaultRef, r.branch ?? `wd/${id}`, r.tag ?? null, r.prompt, r.model ?? null,
-      r.runner ?? null, r.billing ?? "session", JSON.stringify(r.requires ?? []), r.size ?? null, pr, r.ttlHours ?? 24, crypto.randomUUID(), t, t);
+      r.runner ?? null, r.billing ?? "session", r.effort ?? null, JSON.stringify(r.requires ?? []), r.size ?? null, pr, r.ttlHours ?? 24, crypto.randomUUID(), t, t);
     const ahead = this.db.get<{ c: number }>(
       "SELECT COUNT(*) c FROM threads WHERE state='queued' AND (priority>? OR (priority=? AND created<=?))", pr, pr, t)!.c;
     return { id, position: ahead };
@@ -293,7 +294,7 @@ export class Scheduler {
     if (!claimed) return "skipped";
     const body: StartTurn = {
       thread: t.id, epoch, turn: n, repoUrl: repo.url, repoId: t.repo, ref: t.ref, branch: t.branch,
-      sessionId: t.session_id, resume: t.turns > 0, prompt, model: t.model ?? undefined,
+      sessionId: t.session_id, resume: t.turns > 0, prompt, model: t.model ?? undefined, effort: (t.effort as Effort | null) ?? undefined,
       runner: t.runner === "pi" ? "pi" : undefined,
       // Always sent: an agent before 0.4.11 takes a missing billing for api.
       billing: t.billing === "api" ? "api" : "session",

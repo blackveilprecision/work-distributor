@@ -148,6 +148,17 @@ describe("placement", () => {
     expect(sent(api)).toBe("api");
   });
 
+  test("effort is stored and sent only when a thread asks for it; an unknown one is refused", async () => {
+    const h = harness();
+    await ready(h, ["a"], { memAvailMb: 60000 });
+    const plain = submit(h), hard = submit(h, { effort: "xhigh" });
+    await h.sched.tick();
+    const sent = (id: string) => h.agent.started.find((s) => s.b.thread === id)!.b.effort;
+    expect(sent(plain)).toBeUndefined();
+    expect(sent(hard)).toBe("xhigh");
+    expect(() => submit(h, { effort: "huge" as any })).toThrow("effort is one of");
+  });
+
   test("placement prefers the host it would run fastest on, then the one with more memory to spare", async () => {
     const h = harness();
     await ready(h, ["a"], { memAvailMb: 30000, cpuScore: 200 });
