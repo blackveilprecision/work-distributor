@@ -60,7 +60,8 @@ When an agent reports a `rate_limit_event` with status `rejected`, all new start
    - PATH: `path` from `agent.json`, or else the PATH an interactive login shell of the host user prints (`$SHELL -lic`, bash or zsh), read once when the agent starts, followed by the service's own. Tools that add themselves only in `~/.bashrc` or `~/.zshrc` (bun, nvm) are found this way;
    - a per-thread `TMPDIR` inside the worktree;
    - `WD_THREAD`, `WD_KEY`;
-   - `DISABLE_AUTOUPDATER=1`.
+   - `DISABLE_AUTOUPDATER=1`;
+   - `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`, `BASH_MAX_TIMEOUT_MS` (the turn's runtime) and `BASH_DEFAULT_TIMEOUT_MS=1800000` (see below).
 
    It never passes `GH_TOKEN`, `GITHUB_TOKEN` or `SSH_AUTH_SOCK`.
 
@@ -194,7 +195,7 @@ Hosts and repos can be listed in `coord.json` or registered through the caller A
 
 A thread submitted with `--runner pi` (CLI or MCP) runs as `pi -p --mode json --approve --no-mcp --session-id <id>` with the same worktree, prompt-file and env-file plumbing as a claude thread; its model is pi's `provider/id[:thinking]` form (e.g. `deepseek/deepseek-flash` or `anthropic/claude-sonnet-5-5:high`). The outcome of a pi turn is its last `turn_end` event (final message, usage, stop reason). A host serves a pi thread only when its pi probe passes, and a claude thread only when the claude login works — the host itself is refused only when neither runner is ready.
 
-The appended note tells the session it is headless: `claude -p` exits with its reply, so a Workflow, background Bash or background agent still running then is killed. The session must wait for them before replying.
+Background work outlives the reply: `claude -p` waits for background Bash, background agents and Workflow runs, and gives the session a new turn for each result. The turn ends when nothing runs in the background any more, and its last result is the turn's outcome. `claude -p` waits only 10 idle minutes for agents and workflows by default, so wd sets `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`: the turn's `RuntimeMaxSec` is the only limit. `BASH_MAX_TIMEOUT_MS` is the turn's runtime, so one foreground command may wait as long as the turn, and `BASH_DEFAULT_TIMEOUT_MS` is 30 min, so a build without its own timeout is not moved to the background after 2. The appended note tells the session this, so it doesn't poll. A thread splits its work into a Workflow (agents per part, a model per stage) only when its prompt asks for one; that is the caller's choice.
 
 A thread's `effort` (`low` to `max`, optional) becomes claude's `--effort` or pi's `--thinking`; without one, the host's own settings for the model apply. The model and effort hold for the whole thread: how a task is split up inside it (subagents, a workflow) is the caller's prompt to ask for.
 

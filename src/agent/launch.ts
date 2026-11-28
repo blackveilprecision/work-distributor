@@ -29,12 +29,18 @@ export function turnEnv(s: StartTurn, wt: string, o: { path?: string; extra?: Re
     PATH: o.path ?? process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     SHELL: "/bin/bash", TMPDIR: join(wt, ".wd-tmp"), WD_THREAD: s.thread, WD_KEY: `${s.thread}-${s.epoch}`,
     DISABLE_AUTOUPDATER: "1",
+    // claude -p waits for background work (Bash, subagents, Workflow runs) after its reply and gives the session a turn
+    // for each result, but only 10 idle minutes for subagents and workflows: a workflow longer than that was killed
+    // with the turn. No ceiling here; the turn's own runtime cap still bounds it. Bash may run as long as the turn
+    // (a build or test waited on in the foreground), and a command without a timeout is moved to the background
+    // after 30 min, not 2.
+    CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0",
+    BASH_MAX_TIMEOUT_MS: String(s.runtimeMaxSec * 1000), BASH_DEFAULT_TIMEOUT_MS: "1800000",
   };
 }
 
-// A turn is headless: claude exits with its reply, and anything still running in the background (a Workflow, a
-// background Bash or agent) dies with it. No notification ever reaches the session afterwards.
-export const HEADLESS_NOTE = "This session is headless and ends the moment you reply: background tasks (Workflow runs, background Bash, background agents) are killed then and no notification will ever arrive. Wait for every one to finish (or stop it) before your final reply.";
+// A turn is headless: the session may not know that background work outlives its reply (see turnEnv) and polls instead.
+export const HEADLESS_NOTE = "This session is headless. Background work (Workflow runs, background Bash, background agents) keeps running after you reply, and each result comes back to you as a new turn: no polling loops are needed. The session ends when nothing runs in the background any more, and your last reply is the report, so make it the summary of the whole task, not of the last result.";
 
 
 export function claudeArgs(s: StartTurn): string[] {

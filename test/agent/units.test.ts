@@ -47,8 +47,9 @@ describe("run script and environment", () => {
     process.env.GH_TOKEN = "a"; process.env.GITHUB_TOKEN = "b"; process.env.SSH_AUTH_SOCK = "c"; process.env.RANDOM_THING = "d";
     try {
       const e = turnEnv(start(), "/wt/t1");
-      expect(Object.keys(e).sort()).toEqual(["DISABLE_AUTOUPDATER", "HOME", "LOGNAME", "PATH", "SHELL", "TMPDIR", "USER", "WD_KEY", "WD_THREAD"]);
+      expect(Object.keys(e).sort()).toEqual(["BASH_DEFAULT_TIMEOUT_MS", "BASH_MAX_TIMEOUT_MS", "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "DISABLE_AUTOUPDATER", "HOME", "LOGNAME", "PATH", "SHELL", "TMPDIR", "USER", "WD_KEY", "WD_THREAD"]);
       expect(e).toMatchObject({ WD_KEY: "t1-3", WD_THREAD: "t1", TMPDIR: "/wt/t1/.wd-tmp", SHELL: "/bin/bash", DISABLE_AUTOUPDATER: "1" });
+      expect(e).toMatchObject({ CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0", BASH_MAX_TIMEOUT_MS: String(start().runtimeMaxSec * 1000) });   // background work lives as long as the turn
     } finally { for (const k of ["GH_TOKEN", "GITHUB_TOKEN", "SSH_AUTH_SOCK", "RANDOM_THING"]) delete process.env[k]; }
   });
 
