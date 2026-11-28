@@ -111,7 +111,7 @@ Reports stay until acknowledged. There are four ways to get them:
 | What happens | Result |
 |---|---|
 | Launch error (clone failed, `claude` missing, bad args) | `failed` with the error; never retried |
-| No heartbeat for `lostAfterSec` (default 120 s) from a Linux host | host `lost`; its threads `lost`; their turns are stopped when the host returns |
+| No heartbeat for `lostAfterSec` (default 120 s) from a Linux host, counted from the coordinator's own start at the earliest (its downtime is not the host's silence) | host `lost`; its threads `lost`; their turns are stopped when the host returns |
 | No heartbeat from a macOS host | host `asleep`, with a non-final report; its threads become `lost` after `asleepLostSec` (default 6 h) |
 | No events and no CPU use for `stallMin` (default 20 min) | turn stopped; thread `stalled`. A long build with no output still uses CPU, so it is not a stall |
 | Out-of-memory kill or `RuntimeMaxSec` reached | `failed` with the cause |

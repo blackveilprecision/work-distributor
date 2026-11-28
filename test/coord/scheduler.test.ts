@@ -346,6 +346,21 @@ describe("events and turn end", () => {
 });
 
 describe("loss, sleep, stall", () => {
+  test("a restarted coordinator counts a host's silence from its own start, not across its downtime", async () => {
+    const h = harness();
+    await ready(h, ["a"]);
+    const id = submit(h);
+    await h.sched.tick();
+    h.advance(130_000);   // the coordinator was down this long
+    const { Scheduler } = await import("../../src/coord/scheduler");
+    const fresh = new Scheduler(h.db, h.cfg, h.agent, h.reports, () => h.clock.t);
+    await fresh.tick();
+    expect([h.db.host("a")!.state, h.db.thread(id)!.state]).toEqual(["ok", "running"]);
+    h.advance(121_000);   // and now really silent
+    await fresh.tick();
+    expect(h.db.host("a")!.state).toBe("lost");
+  });
+
   test("a linux host silent past lostAfterSec: threads lost, epoch stale, reconnecting agent told to stop", async () => {
     const h = harness();
     await ready(h, ["a"]);

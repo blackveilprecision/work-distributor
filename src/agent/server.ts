@@ -101,14 +101,17 @@ async function beat(ctx: Ctx) {
   if (r.status !== 200) return;
   const reply = r.body as HeartbeatReply | null;
   for (const st of reply?.stop ?? []) void stop(ctx, st);
-  if (!ctx.preparing.size && wantUpdate(reply?.version, cfg.autoUpdate)) {   // not while a worktree is being set up for a start
-    try {
-      await replaceBinary(reply!.version!, process.execPath);
-      console.error(`wd agent: updated ${VERSION} -> ${reply!.version}; exiting for the service manager to restart it`);
+  // In the background: heartbeats go on while the binary downloads, or a slow download gets the host marked lost.
+  if (!updating && !ctx.preparing.size && wantUpdate(reply?.version, cfg.autoUpdate)) {   // not while a worktree is being set up for a start
+    const v = reply!.version!;
+    updating = replaceBinary(v, process.execPath).then(() => {
+      if (ctx.preparing.size) return;   // a start began meanwhile: the new binary is in place, the next restart runs it
+      console.error(`wd agent: updated ${VERSION} -> ${v}; exiting for the service manager to restart it`);
       process.exit(0);
-    } catch (e) { console.error(`wd agent: update to ${reply!.version} failed (retrying in 10 minutes):`, (e as Error).message); }
+    }, (e) => console.error(`wd agent: update to ${v} failed (retrying in 10 minutes):`, (e as Error).message)).finally(() => { updating = null; });
   }
 }
+let updating: Promise<void> | null = null;
 
 export async function startAgent(cfg: AgentConfig) {
   mkdirSync(cfg.dataDir, { recursive: true });

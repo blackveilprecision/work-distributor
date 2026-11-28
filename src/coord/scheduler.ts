@@ -58,7 +58,8 @@ export class Scheduler {
   private busy = false;
   private docWork = new Set<Promise<unknown>>();
   private docKeys = new Set<string>();
-  constructor(public db: Db, public cfg: Config, public agent: AgentClient, public reports: Reports, public now: () => number = Date.now) {}
+  private readonly started: number;
+  constructor(public db: Db, public cfg: Config, public agent: AgentClient, public reports: Reports, public now: () => number = Date.now) { this.started = now(); }
 
   // Hosts and repos: coord.json entries plus the ones registered through the API. Read on every use, so a registration takes effect at once; coord.json wins on a clash.
   hostCfgs(): Record<string, HostCfg> { return { ...this.db.regHosts(), ...this.cfg.hosts }; }
@@ -319,7 +320,8 @@ export class Scheduler {
   private hosts() {
     const now = this.now(), quiet = this.cfg.lostAfterSec * 1000;
     for (const h of this.db.all<HostRow>("SELECT * FROM hosts WHERE state IN ('ok','refused','asleep')")) {
-      const silent = now - h.seen;
+      // Silence counts from this coordinator's start: while it was down no agent could reach it.
+      const silent = now - Math.max(h.seen, this.started);
       if (silent <= quiet) continue;
       const mac = (JSON.parse(h.hb) as Heartbeat).probe.os === "darwin";
       const next = mac && silent < this.cfg.asleepLostSec * 1000 ? "asleep" : "lost";
